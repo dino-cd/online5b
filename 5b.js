@@ -1977,7 +1977,7 @@ let lcMessageText = '';
 const lcZoomFactor = 2;
 let lcZoom = lcZoomFactor;
 let lcPan = [0,0];
-// const exploreTabNames = ['Featured', 'New', 'Top', '🔍'];
+// const exploreTabNames = ['Featured', 'New', 'Top', 'ðŸ”'];
 // const exploreTabWidths = [190, 115, 115, 45];
 const exploreTabNames = ['Levels', 'Levelpacks','Search'];
 const exploreTabWidths = [125, 200, 125];
@@ -2717,7 +2717,10 @@ function menuOptions() {
 	menuScreen = 9;
 }
 function menuOnline() {
-	menuScreen = 12
+	menuScreen = 12;
+	onlineLoadLevels();
+	_onlineNameBoxObj = null;
+	_onlineKwBoxObj   = null;
 }
 function menuExitOptions() {
 	menuScreen = 0;
@@ -2797,6 +2800,7 @@ function exitExploreLevel() {
 	cameraY = 0;
 }
 function drawOnlineMenu(){
+	_drawOnlineMenuImpl();
 }
 
 function drawMenu0Button(text, x, y, grayed, action, width = menu0ButtonSize.w) {
@@ -3086,7 +3090,7 @@ function drawLevelButtons() {
 	ctx.textBaseline = 'top';
 	ctx.font = 'bold 32px Helvetica';
 	ctx.fillText(currentLevelDisplayName, 12.85, 495.45);
-	drawMenu2_3Button(0, 837.5, 486.95, playMode == 3 ? exitExploreLevel : playMode == 2 ? exitTestLevel : menu3Menu);
+	drawMenu2_3Button(0, 837.5, 486.95, playMode == 4 ? onlineExitGame : playMode == 3 ? exitExploreLevel : playMode == 2 ? exitTestLevel : menu3Menu);
 }
 
 //https://thewebdev.info/2021/05/15/how-to-add-line-breaks-into-the-html5-canvas-with-filltext/
@@ -3163,7 +3167,7 @@ function binarySearch({max, getValue, match}) {
 
 function fitString(context, str, maxWidth) {
 	let width = context.measureText(str).width;
-	const ellipsis = '…';
+	const ellipsis = 'â€¦';
 	const ellipsisWidth = context.measureText(ellipsis).width;
 	if (width <= maxWidth || width <= ellipsisWidth) {
 		return str;
@@ -4757,8 +4761,17 @@ function endDeath(i) {
 		char[i].atEnd = false;
 	}
 	deathCount++;
-	saveGame();
-	if (i == control) changeControl();
+	if (onlineInGame && (i === onlineMyCharIndex || i === onlineOtherCharIndex)) {
+		const info = myLevelChars[1][i];
+		char[i].x = char[i].px = info[1] * 30;
+		char[i].y = char[i].py = info[2] * 30;
+		char[i].vx = char[i].vy = 0;
+		char[i].charState = 10;
+		char[i].deathTimer = 30;
+	} else {
+		saveGame();
+		if (i == control && !onlineInGame) changeControl();
+	}
 }
 
 function bounce(i) {
@@ -7756,7 +7769,9 @@ function draw() {
 						if (currentLevel < levelCount) resetLevel();
 						else exitLevel();
 					} else {
-						if (playMode == 3) {
+						if (playMode == 4) {
+							onlineExitGame();
+						} else if (playMode == 3) {
 							exitExploreLevel();
 						} else if (playMode == 2) {
 							exitTestLevel();
@@ -7886,7 +7901,7 @@ function draw() {
 						}
 						downPress = true;
 					} else downPress = false;
-					if (_keysDown[90]) {
+					if (_keysDown[90] && !onlineInGame) {
 						if (!qPress && !recover) {
 							changeControl();
 							qTimer = 6;
@@ -9873,7 +9888,7 @@ function draw() {
 
 					if(exploreLevelPageLevel.featured) {
 						ctx.fillStyle = '#ffd900ff';
-						if(exploreLevelPageLevel.title.charAt(0) != '★') exploreLevelPageLevel.title = '★ ' + exploreLevelPageLevel.title + " ★";
+						if(exploreLevelPageLevel.title.charAt(0) != 'â˜…') exploreLevelPageLevel.title = 'â˜… ' + exploreLevelPageLevel.title + " â˜…";
 					}
 					else ctx.fillStyle = '#ffffff';
 					
@@ -10552,9 +10567,39 @@ function draw() {
 
 			if (lcPopUpNextFrame) lcPopUp = true;
 			lcPopUpNextFrame = false;
+			break;
 		case 12:
 			drawOnlineMenu();
 			break;
+
+		case 13: {
+			ctx.fillStyle = '#666666';
+			ctx.fillRect(0, 0, cwidth, cheight);
+			ctx.fillStyle = '#000000';
+			ctx.globalAlpha = 0.35;
+			ctx.fillRect(0, 0, cwidth, cheight);
+			ctx.globalAlpha = 1;
+
+			ctx.font = 'bold 40px Helvetica';
+			ctx.fillStyle = '#ffffff';
+			ctx.textAlign = 'center';
+			ctx.textBaseline = 'middle';
+			const dots = '.'.repeat((_frameCount >> 4) % 4);
+			ctx.fillText('Finding opponent' + dots, cwidth / 2, cheight / 2 - 30);
+
+			ctx.font = '22px Helvetica';
+			ctx.fillStyle = '#aaaaaa';
+			ctx.fillText('Level: ' + (onlineLevelsData && onlineLevelsData[onlineSelectedLevel] ? onlineLevelsData[onlineSelectedLevel].name : ''), cwidth / 2, cheight / 2 + 20);
+			if (onlineKeyword.trim()) {
+				ctx.fillText('Code: ' + onlineKeyword.trim(), cwidth / 2, cheight / 2 + 50);
+			}
+
+			drawMenu2_3Button(1, 837.5, 486.95, () => {
+				onlineDisconnect();
+				menuScreen = 12;
+			});
+			break;
+		}
 	}
 
 	if (levelTimer <= 30 || menuScreen != 3) {
@@ -10574,6 +10619,17 @@ function draw() {
 			drawCutScene();
 		}
 		drawLevelButtons();
+		if (onlineInGame && menuScreen == 3) {
+			if (_frameCount % 2 === 0) onlineSendState();
+			onlineApplyOtherState();
+			const myName = onlinePlayerName || 'Player';
+			const theirName = onlineOtherName || 'Player';
+			ctx.save();
+			ctx.translate(Math.floor(-cameraX + shakeX), Math.floor(-cameraY + shakeY));
+			drawOnlineName(onlineMyCharIndex, myName);
+			drawOnlineName(onlineOtherCharIndex, theirName);
+			ctx.restore();
+		}
 		if (menuScreen != 3) {
 			cameraX = 0;
 			cameraY = 0;
@@ -11283,4 +11339,436 @@ function deselectAllTextBoxes() {
 		}
 	}
 	canvas.setAttribute('contenteditable', false);
+}
+
+// ============================================================
+//  ONLINE MULTIPLAYER â€” Firebase Realtime Database
+//  All Firebase calls are done via dynamic import at runtime.
+// ============================================================
+
+let _fbDb_online = null;
+let _fb_ref, _fb_set, _fb_get, _fb_onValue, _fb_off, _fb_remove, _fb_update, _fb_serverTimestamp, _fb_push;
+
+(async function _initFirebase() {
+	const { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
+	const db_mod = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js");
+	const app = initializeApp({
+		apiKey: "AIzaSyDatyqrm83ciy_mTJx6U5Cq_CQPRsq7UBs",
+		authDomain: "rnrcloud-67626.firebaseapp.com",
+		databaseURL: "https://rnrcloud-67626-default-rtdb.asia-southeast1.firebasedatabase.app",
+		projectId: "rnrcloud-67626",
+		storageBucket: "rnrcloud-67626.firebasestorage.app",
+		messagingSenderId: "670873993088",
+		appId: "1:670873993088:web:b6c0571387651985200b65"
+	}, "online_app");
+	_fbDb_online     = db_mod.getDatabase(app);
+	_fb_ref          = db_mod.ref;
+	_fb_set          = db_mod.set;
+	_fb_get          = db_mod.get;
+	_fb_onValue      = db_mod.onValue;
+	_fb_off          = db_mod.off;
+	_fb_remove       = db_mod.remove;
+	_fb_update       = db_mod.update;
+	_fb_push         = db_mod.push;
+	_fb_serverTimestamp = db_mod.serverTimestamp;
+})();
+
+let onlinePlayerName   = '';
+let onlineKeyword      = '';
+let onlineLevelsData   = null;
+let onlineSelectedLevel = -1;
+let onlineSessionId    = null;
+let onlineMySlot       = -1;
+let onlineOtherSlot    = -1;
+let onlineMyCharIndex  = -1;
+let onlineOtherCharIndex = -1;
+let onlineOtherName    = '';
+let onlineUnsubMatch   = null;
+let onlineUnsubState   = null;
+let onlineMatchmaking  = false;
+let onlineInGame       = false;
+let onlineOtherX       = null;
+let onlineOtherY       = null;
+let onlineOtherVx      = 0;
+let onlineOtherVy      = 0;
+let onlineOtherDire    = 4;
+let onlineOtherFrame   = 3;
+let onlineOtherLeg1    = 0;
+let onlineOtherLeg2    = 0;
+let onlineOtherOnob    = false;
+let _onlineNameBoxObj  = null;
+let _onlineKwBoxObj    = null;
+
+async function onlineLoadLevels() {
+	if (onlineLevelsData) return;
+	try {
+		const r = await fetch('data/2pLevels.txt');
+		const text = await r.text();
+		const lines = text.replace(/\r/g, '').split('\n');
+		const lvls = [];
+		let i = 0;
+		while (i < lines.length) {
+			while (i < lines.length && lines[i].trim() === '') i++;
+			if (i >= lines.length) break;
+			const name = lines[i].trim(); i++;
+			if (i >= lines.length) break;
+			const metaLine = lines[i].trim(); i++;
+			const meta = metaLine.split(',');
+			const h = parseInt(meta[1]) || 0;
+			const charCountL = parseInt(meta[2]) || 0;
+			let rawLines = [name, metaLine];
+			for (let y = 0; y < h; y++) { rawLines.push(lines[i] || ''); i++; }
+			for (let c = 0; c < charCountL; c++) { rawLines.push(lines[i] || ''); i++; }
+			const diaCount = parseInt(lines[i] || '0');
+			rawLines.push(lines[i] || '0'); i++;
+			for (let d = 0; d < diaCount; d++) { rawLines.push(lines[i] || ''); i++; }
+			rawLines.push(lines[i] || '000000'); i++;
+			lvls.push({ name, data: rawLines.join('\r\n') });
+		}
+		onlineLevelsData = lvls.length ? lvls : null;
+	} catch(e) {
+		console.error('Failed to load 2pLevels.txt', e);
+	}
+}
+
+function onlineGenId() {
+	return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+}
+
+async function onlineStartMatchmaking(levelIndex) {
+	if (!_fbDb_online) { alert('Firebase not ready yet, try again in a moment.'); return; }
+	onlineSelectedLevel = levelIndex;
+	onlineMatchmaking = true;
+	menuScreen = 13;
+
+	const keyword = onlineKeyword.trim();
+	const queuePath = keyword ? ('online/queue_kw/' + keyword.replace(/[.#$\[\]]/g, '_')) : 'online/queue_' + levelIndex;
+
+	const snap = await _fb_get(_fb_ref(_fbDb_online, queuePath));
+	const existing = snap.val();
+
+	if (existing && existing.level === levelIndex) {
+		onlineSessionId  = existing.sessionId;
+		onlineMySlot     = 1;
+		onlineOtherSlot  = 0;
+		onlineOtherName  = existing.name || 'Player';
+		await _fb_remove(_fb_ref(_fbDb_online, queuePath));
+		await _fb_set(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/player1'), {
+			name: onlinePlayerName || 'Player', ready: true
+		});
+		await _fb_update(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId), { started: true });
+		onlineBeginGame();
+	} else {
+		const sessionId = onlineGenId();
+		onlineSessionId = sessionId;
+		onlineMySlot    = 0;
+		onlineOtherSlot = 1;
+		await _fb_set(_fb_ref(_fbDb_online, queuePath), {
+			sessionId, level: levelIndex,
+			name: onlinePlayerName || 'Player',
+			ts: _fb_serverTimestamp()
+		});
+		await _fb_set(_fb_ref(_fbDb_online, 'online/sessions/' + sessionId + '/player0'), {
+			name: onlinePlayerName || 'Player', ready: true
+		});
+		const sessRef = _fb_ref(_fbDb_online, 'online/sessions/' + sessionId);
+		onlineUnsubMatch = _fb_onValue(sessRef, snap2 => {
+			const val = snap2.val();
+			if (val && val.started && val.player1) {
+				onlineOtherName = val.player1.name || 'Player';
+				_fb_off(sessRef);
+				onlineUnsubMatch = null;
+				onlineBeginGame();
+			}
+		});
+	}
+}
+
+function onlineBeginGame() {
+	onlineMatchmaking = false;
+	onlineInGame      = true;
+
+	const levelData = onlineLevelsData[onlineSelectedLevel];
+	readExploreLevelString(levelData.data);
+
+	const allChars = myLevelChars[1];
+	const playableIndices = [];
+	for (let i = 0; i < allChars.length; i++) {
+		if (allChars[i][3] === 10) playableIndices.push(i);
+	}
+	if (playableIndices.length < 2) {
+		for (let i = 0; i < allChars.length; i++) playableIndices.push(i);
+	}
+	const pCount = playableIndices.length;
+	onlineMyCharIndex    = playableIndices[onlineMySlot    % pCount];
+	onlineOtherCharIndex = playableIndices[onlineOtherSlot % pCount];
+
+	playMode    = 4;
+	currentLevel = -1;
+	toSeeCS     = false;
+	wipeTimer   = 30;
+	menuScreen  = 3;
+	transitionType = 1;
+
+	charCount  = allChars.length;
+	charCount2 = pCount;
+	copyLevel(myLevel[1]);
+	char = new Array(charCount);
+	HPRC1 = HPRC2 = 1000000;
+	for (let i = 0; i < charCount; i++) {
+		const id = allChars[i][0];
+		char[i] = new Character(
+			id,
+			allChars[i][1] * 30, allChars[i][2] * 30,
+			70 + i * 40, 400 - i * 30,
+			allChars[i][3],
+			charD[id][0], charD[id][1], charD[id][2], charD[id][2],
+			charD[id][3], charD[id][4], charD[id][6], charD[id][8],
+			id < 35 ? charModels[id].defaultExpr : 0
+		);
+	}
+	cLevelDialogueChar = [];
+	cLevelDialogueFace = [];
+	cLevelDialogueText = [];
+	currentLevelDisplayName = levelData.name + ' (Online)';
+
+	charDepths = new Array((charCount + 1) * 2).fill(-1);
+	for (let i = 0; i < charCount; i++) charDepths[i * 2] = Math.floor(charCount - i - 1);
+	charDepths[(charCount - 1) * 2] = -1;
+	charDepths[charCount * 2] = 0;
+	charDepth = levelWidth * levelHeight + charCount * 2;
+	getTileDepths();
+	calculateShadowsAndBorders();
+	osc1.width = Math.floor(levelWidth * 30 * pixelRatio);
+	osc1.height = Math.floor(levelHeight * 30 * pixelRatio);
+	osctx1.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+	osc2.width = Math.floor(levelWidth * 30 * pixelRatio);
+	osc2.height = Math.floor(levelHeight * 30 * pixelRatio);
+	osctx2.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+	drawStaticTiles();
+	recover = false;
+	cornerHangTimer = 0;
+	charsAtEnd = 0;
+	control = onlineMyCharIndex;
+	cutScene = 0;
+	bgXScale = Math.max(((levelWidth - 32) * 10 + 960) / 9.6, 100);
+	bgYScale = Math.max(((levelHeight - 18) * 10 + 540) / 5.4, 100);
+	drawLevelBG();
+	cameraX = Math.min(Math.max(char[control].x - 480, 0), levelWidth * 30 - 960);
+	cameraY = Math.min(Math.max(char[control].y - 270, 0), levelHeight * 30 - 540);
+	gotThisCoin = false;
+	levelTimer  = 0;
+	recoverTimer = 0;
+	levelTimer2 = getTimer();
+	doorLightFade = new Array(charCount2).fill(0);
+	doorLightFadeDire = new Array(charCount2).fill(0);
+
+	control = onlineMyCharIndex;
+	charDepths[charDepths.indexOf(onlineMyCharIndex)] = charDepths[charCount * 2];
+	charDepths[charCount * 2] = onlineMyCharIndex;
+
+	onlineOtherX = char[onlineOtherCharIndex].x;
+	onlineOtherY = char[onlineOtherCharIndex].y;
+
+	const stateRef = _fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/state');
+	onlineUnsubState = _fb_onValue(stateRef, snap => {
+		const val = snap.val();
+		if (!val) return;
+		const other = val['p' + onlineOtherSlot];
+		if (!other) return;
+		onlineOtherX    = other.x;
+		onlineOtherY    = other.y;
+		onlineOtherVx   = other.vx  || 0;
+		onlineOtherVy   = other.vy  || 0;
+		onlineOtherDire = other.dire || 4;
+		onlineOtherFrame = other.frame || 3;
+		onlineOtherLeg1 = other.leg1 || 0;
+		onlineOtherLeg2 = other.leg2 || 0;
+		onlineOtherOnob = other.onob || false;
+	});
+}
+
+function onlineSendState() {
+	if (!onlineInGame || !onlineSessionId || !_fbDb_online) return;
+	const me = char[onlineMyCharIndex];
+	if (!me) return;
+	_fb_update(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/state/p' + onlineMySlot), {
+		x: Math.round(me.x * 10) / 10,
+		y: Math.round(me.y * 10) / 10,
+		vx: Math.round(me.vx * 100) / 100,
+		vy: Math.round(me.vy * 100) / 100,
+		dire: me.dire,
+		frame: me.frame,
+		leg1: me.leg1frame,
+		leg2: me.leg2frame,
+		onob: me.onob
+	});
+}
+
+function onlineApplyOtherState() {
+	if (!onlineInGame) return;
+	const c = char[onlineOtherCharIndex];
+	if (!c || onlineOtherX === null) return;
+	c.x = onlineOtherX;
+	c.y = onlineOtherY;
+	c.vx = onlineOtherVx;
+	c.vy = onlineOtherVy;
+	c.dire = onlineOtherDire;
+	c.frame = onlineOtherFrame;
+	c.leg1frame = onlineOtherLeg1;
+	c.leg2frame = onlineOtherLeg2;
+	c.onob = onlineOtherOnob;
+	c.justChanged = 2;
+}
+
+function onlineDisconnect() {
+	if (onlineUnsubMatch && _fbDb_online) {
+		try { _fb_off(_fb_ref(_fbDb_online, 'online/queue_' + onlineSelectedLevel)); } catch(e){}
+		onlineUnsubMatch = null;
+	}
+	if (onlineUnsubState && _fbDb_online && onlineSessionId) {
+		try { _fb_off(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/state')); } catch(e){}
+		onlineUnsubState = null;
+	}
+	if (onlineSessionId && _fbDb_online) {
+		_fb_remove(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId));
+		onlineSessionId = null;
+	}
+	onlineInGame    = false;
+	onlineMatchmaking = false;
+	onlineOtherX    = null;
+}
+
+function onlineExitGame() {
+	onlineDisconnect();
+	cameraX = 0;
+	cameraY = 0;
+	menuScreen = 12;
+}
+
+function _drawRoundedRectFill(context, x, y, w, h, r) {
+	context.beginPath();
+	context.moveTo(x + r, y);
+	context.lineTo(x + w - r, y);
+	context.quadraticCurveTo(x + w, y, x + w, y + r);
+	context.lineTo(x + w, y + h - r);
+	context.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+	context.lineTo(x + r, y + h);
+	context.quadraticCurveTo(x, y + h, x, y + h - r);
+	context.lineTo(x, y + r);
+	context.quadraticCurveTo(x, y, x + r, y);
+	context.closePath();
+	context.fill();
+}
+
+function drawOnlineName(charIndex, displayName) {
+	if (!onlineInGame || !displayName) return;
+	const c = char[charIndex];
+	if (!c) return;
+	ctx.save();
+	ctx.font = 'bold 11px Helvetica';
+	ctx.textAlign = 'center';
+	ctx.textBaseline = 'bottom';
+	const tw = ctx.measureText(displayName).width + 10;
+	const tx = c.x;
+	const ty = c.y - c.h - 4;
+	ctx.fillStyle = 'rgba(0,0,0,0.6)';
+	_drawRoundedRectFill(ctx, tx - tw / 2, ty - 15, tw, 15, 3);
+	ctx.fillStyle = '#ffffff';
+	ctx.fillText(displayName, tx, ty);
+	ctx.restore();
+}
+
+function _ensureOnlineBoxes() {
+	if (!_onlineNameBoxObj) {
+		_onlineNameBoxObj = new TextBox(onlinePlayerName, 344, 280, 280, 36, '#444444', '#ffffff', '#888888', 22, 22, 'Helvetica', false, [8, 7, 8, 7], 1, 8, false);
+	}
+	if (!_onlineKwBoxObj) {
+		_onlineKwBoxObj = new TextBox(onlineKeyword, 344, 350, 280, 36, '#444444', '#ffffff', '#888888', 22, 22, 'Helvetica', false, [8, 7, 8, 7], 1, 8, false);
+	}
+}
+
+function _drawOnlineMenuImpl() {
+	_ensureOnlineBoxes();
+
+	ctx.fillStyle = '#555555';
+	ctx.fillRect(0, 0, cwidth, cheight);
+
+	ctx.fillStyle = '#000000';
+	ctx.globalAlpha = 0.3;
+	ctx.fillRect(0, 0, cwidth, cheight);
+	ctx.globalAlpha = 1;
+
+	ctx.textAlign = 'center';
+	ctx.textBaseline = 'top';
+	ctx.fillStyle = '#ffffff';
+	ctx.font = 'bold 48px Helvetica';
+	ctx.fillText('ONLINE', cwidth / 2, 28);
+
+	ctx.font = '20px Helvetica';
+	ctx.fillStyle = '#dddddd';
+	ctx.textAlign = 'left';
+	ctx.fillText('Your Name:', 344, 256);
+	_onlineNameBoxObj.y = 280;
+	_onlineNameBoxObj.draw();
+	onlinePlayerName = _onlineNameBoxObj.text;
+
+	ctx.fillStyle = '#dddddd';
+	ctx.fillText('Private Code  (optional):', 344, 323);
+	_onlineKwBoxObj.y = 348;
+	_onlineKwBoxObj.draw();
+	onlineKeyword = _onlineKwBoxObj.text;
+
+	ctx.font = '13px Helvetica';
+	ctx.fillStyle = '#aaaaaa';
+	ctx.textAlign = 'center';
+	ctx.fillText('If you and a friend both enter the same code, you will only match with each other.', cwidth / 2, 392);
+
+	if (!onlineLevelsData) {
+		onlineLoadLevels();
+		ctx.fillStyle = '#aaaaaa';
+		ctx.font = '22px Helvetica';
+		ctx.textAlign = 'center';
+		ctx.textBaseline = 'middle';
+		ctx.fillText('Loading levels...', cwidth / 2, 460);
+	} else {
+		ctx.font = 'bold 22px Helvetica';
+		ctx.fillStyle = '#ffffff';
+		ctx.textAlign = 'center';
+		ctx.textBaseline = 'top';
+		ctx.fillText('Select a Level to Play:', cwidth / 2, 415);
+
+		const btnW = 220, btnH = 44, btnGap = 22;
+		const total = onlineLevelsData.length;
+		const totalW = total * btnW + (total - 1) * btnGap;
+		let bx = (cwidth - totalW) / 2;
+		for (let i = 0; i < total; i++) {
+			const by = 447;
+			let fill = '#444444';
+			const hov = onRect(_xmouse, _ymouse, bx, by, btnW, btnH);
+			if (hov) {
+				onButton = true;
+				fill = '#606060';
+				if (mousePressedLastFrame && onRect(lastClickX, lastClickY, bx, by, btnW, btnH)) {
+					onlineStartMatchmaking(i);
+				}
+			}
+			ctx.fillStyle = fill;
+			ctx.fillRect(bx, by, btnW, btnH);
+			ctx.strokeStyle = '#888888';
+			ctx.lineWidth = 2;
+			ctx.strokeRect(bx, by, btnW, btnH);
+			ctx.fillStyle = '#ffffff';
+			ctx.font = 'bold 19px Helvetica';
+			ctx.textAlign = 'center';
+			ctx.textBaseline = 'middle';
+			ctx.fillText(onlineLevelsData[i].name, bx + btnW / 2, by + btnH / 2);
+			bx += btnW + btnGap;
+		}
+	}
+
+	drawMenu2_3Button(1, 837.5, 486.95, () => {
+		deselectAllTextBoxes();
+		menuScreen = 0;
+	});
 }
