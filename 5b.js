@@ -2716,7 +2716,9 @@ function beginNewGame() {
 function menuOptions() {
 	menuScreen = 9;
 }
-
+function menuOnline() {
+	menuScreen = 12
+}
 function menuExitOptions() {
 	menuScreen = 0;
 	saveSettings();
@@ -2793,6 +2795,8 @@ function exitExploreLevel() {
 	exploreDescLine = 0;
 	cameraX = 0;
 	cameraY = 0;
+}
+function drawOnlineMenu(){
 }
 
 function drawMenu0Button(text, x, y, grayed, action, width = menu0ButtonSize.w) {
@@ -2957,12 +2961,14 @@ function drawMenu() {
 		drawNewGame2Button('YES', 680.4, 169.75, '#993333', menuNewGame2yes);
 		drawNewGame2Button('NO', 815.9, 169.75, '#1a4d1a', menuNewGame2no);
 	} else {
+		drawMenu0Button('ONLINE', 665.55, 170, false, menuOnline);
 		drawMenu0Button('OPTIONS', 665.55, 259.1, false, menuOptions);
 		drawMenu0Button('NEW GAME', 665.55, 348.4, false, menuNewGame);
 	}
 	drawMenu0Button('CONTINUE GAME', 665.55, 393.05, levelProgress == 0, menuContGame);
 	drawMenu0Button('LEVEL CREATOR', 665.55, 437.7, false, menuLevelCreator);
 	drawMenu0Button('EXPLORE', 665.55, 482.5, false, menuExplore);
+	
 
 	// let started = true;
 	// if (bfdia5b.data.levelProgress == undefined || bfdia5b.data.levelProgress == 0) {
@@ -10546,6 +10552,8 @@ function draw() {
 
 			if (lcPopUpNextFrame) lcPopUp = true;
 			lcPopUpNextFrame = false;
+		case 12:
+			drawOnlineMenu();
 			break;
 	}
 
