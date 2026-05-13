@@ -4762,11 +4762,11 @@ function endDeath(i) {
 	}
 	deathCount++;
 	if (onlineInGame && (i === onlineMyCharIndex || i === onlineOtherCharIndex)) {
-		const info = myLevelChars[1][i];
-		char[i].x = char[i].px = info[1] * 30;
-		char[i].y = char[i].py = info[2] * 30;
+		const sl = startLocations[onlineSelectedLevel][i];
+		char[i].x = char[i].px = sl[1] * 30 + (sl[2] * 30) / 100;
+		char[i].y = char[i].py = sl[3] * 30 + (sl[4] * 30) / 100;
 		char[i].vx = char[i].vy = 0;
-		char[i].charState = 10;
+		char[i].charState = sl[5];
 		char[i].deathTimer = 30;
 	} else {
 		saveGame();
@@ -11341,11 +11341,6 @@ function deselectAllTextBoxes() {
 	canvas.setAttribute('contenteditable', false);
 }
 
-// ============================================================
-//  ONLINE MULTIPLAYER — Firebase Realtime Database
-//  All Firebase calls are done via dynamic import at runtime.
-// ============================================================
-
 let _fbDb_online = null;
 let _fb_ref, _fb_set, _fb_get, _fb_onValue, _fb_off, _fb_remove, _fb_update, _fb_serverTimestamp, _fb_push;
 
@@ -11410,20 +11405,14 @@ async function onlineLoadLevels() {
 		while (i < lines.length) {
 			while (i < lines.length && lines[i].trim() === '') i++;
 			if (i >= lines.length) break;
-			const name = lines[i].trim(); i++;
-			if (i >= lines.length) break;
-			const metaLine = lines[i].trim(); i++;
-			const meta = metaLine.split(',');
-			const h = parseInt(meta[1]) || 0;
-			const charCountL = parseInt(meta[2]) || 0;
-			let rawLines = [name, metaLine];
-			for (let y = 0; y < h; y++) { rawLines.push(lines[i] || ''); i++; }
-			for (let c = 0; c < charCountL; c++) { rawLines.push(lines[i] || ''); i++; }
-			const diaCount = parseInt(lines[i] || '0');
-			rawLines.push(lines[i] || '0'); i++;
-			for (let d = 0; d < diaCount; d++) { rawLines.push(lines[i] || ''); i++; }
-			rawLines.push(lines[i] || '000000'); i++;
-			lvls.push({ name, data: rawLines.join('\r\n') });
+			const name = lines[i].trim();
+			const blockLines = [lines[i]];
+			i++;
+			while (i < lines.length && lines[i].trim() !== '') {
+				blockLines.push(lines[i]);
+				i++;
+			}
+			lvls.push({ name, data: blockLines.join('\r\n') });
 		}
 		onlineLevelsData = lvls.length ? lvls : null;
 	} catch(e) {
@@ -11488,80 +11477,30 @@ function onlineBeginGame() {
 	onlineMatchmaking = false;
 	onlineInGame      = true;
 
-	const levelData = onlineLevelsData[onlineSelectedLevel];
-	readExploreLevelString(levelData.data);
+	playMode     = 4;
+	playingLevelpack = true;
+	loadLevelpack(onlineLevelsData);
 
-	const allChars = myLevelChars[1];
 	const playableIndices = [];
-	for (let i = 0; i < allChars.length; i++) {
-		if (allChars[i][3] === 10) playableIndices.push(i);
+	for (let i = 0; i < startLocations[onlineSelectedLevel].length; i++) {
+		if (startLocations[onlineSelectedLevel][i][5] >= 9) playableIndices.push(i);
 	}
 	if (playableIndices.length < 2) {
-		for (let i = 0; i < allChars.length; i++) playableIndices.push(i);
+		for (let i = 0; i < startLocations[onlineSelectedLevel].length; i++) playableIndices.push(i);
 	}
 	const pCount = playableIndices.length;
 	onlineMyCharIndex    = playableIndices[onlineMySlot    % pCount];
 	onlineOtherCharIndex = playableIndices[onlineOtherSlot % pCount];
 
-	playMode     = 4;
-	currentLevel = -1;
-	toSeeCS      = false;
+	currentLevel = onlineSelectedLevel;
 	transitionType = 1;
+	resetLevel();
 
-	charCount  = allChars.length;
-	charCount2 = pCount;
-	copyLevel(myLevel[1]);
-	char = new Array(charCount);
-	HPRC1 = HPRC2 = 1000000;
-	for (let i = 0; i < charCount; i++) {
-		const id = allChars[i][0];
-		char[i] = new Character(
-			id,
-			allChars[i][1] * 30, allChars[i][2] * 30,
-			70 + i * 40, 400 - i * 30,
-			allChars[i][3],
-			charD[id][0], charD[id][1], charD[id][2], charD[id][2],
-			charD[id][3], charD[id][4], charD[id][6], charD[id][8],
-			id < 35 ? charModels[id].defaultExpr : 0
-		);
-	}
-	cLevelDialogueChar = [];
-	cLevelDialogueFace = [];
-	cLevelDialogueText = [];
-	currentLevelDisplayName = levelData.name + ' (Online)';
-
-	charDepths = new Array((charCount + 1) * 2).fill(-1);
-	for (let i = 0; i < charCount; i++) charDepths[i * 2] = Math.floor(charCount - i - 1);
-	charDepths[(charCount - 1) * 2] = -1;
-	charDepths[charCount * 2] = 0;
-	charDepth = levelWidth * levelHeight + charCount * 2;
-	getTileDepths();
-	calculateShadowsAndBorders();
-	osc1.width = Math.floor(levelWidth * 30 * pixelRatio);
-	osc1.height = Math.floor(levelHeight * 30 * pixelRatio);
-	osctx1.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-	osc2.width = Math.floor(levelWidth * 30 * pixelRatio);
-	osc2.height = Math.floor(levelHeight * 30 * pixelRatio);
-	osctx2.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-	drawStaticTiles();
-	recover = false;
-	cornerHangTimer = 0;
-	charsAtEnd = 0;
-	cutScene = 0;
-	bgXScale = Math.max(((levelWidth - 32) * 10 + 960) / 9.6, 100);
-	bgYScale = Math.max(((levelHeight - 18) * 10 + 540) / 5.4, 100);
-	drawLevelBG();
 	control = onlineMyCharIndex;
 	cameraX = Math.min(Math.max(char[control].x - 480, 0), levelWidth * 30 - 960);
 	cameraY = Math.min(Math.max(char[control].y - 270, 0), levelHeight * 30 - 540);
-	gotThisCoin = false;
-	levelTimer   = 0;
-	recoverTimer = 0;
-	levelTimer2  = getTimer();
-	doorLightFade     = new Array(charCount2).fill(0);
-	doorLightFadeDire = new Array(charCount2).fill(0);
-	charDepths[charDepths.indexOf(onlineMyCharIndex)] = charDepths[charCount * 2];
-	charDepths[charCount * 2] = onlineMyCharIndex;
+	currentLevelDisplayName = onlineLevelsData[onlineSelectedLevel].name + ' (Online)';
+
 	onlineOtherX = char[onlineOtherCharIndex].x;
 	onlineOtherY = char[onlineOtherCharIndex].y;
 
@@ -11639,8 +11578,10 @@ function onlineDisconnect() {
 
 function onlineExitGame() {
 	onlineDisconnect();
-	cameraX = 0;
-	cameraY = 0;
+	playingLevelpack = false;
+	playMode  = 1;
+	cameraX   = 0;
+	cameraY   = 0;
 	menuScreen = 12;
 }
 
