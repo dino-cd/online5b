@@ -11352,6 +11352,14 @@ function deselectAllTextBoxes() {
 			textBoxes[i][j].beingEdited = false;
 		}
 	}
+	if (_onlineNameBoxObj && _onlineNameBoxObj.beingEdited) {
+		_onlineNameBoxObj.text = inputText + _onlineNameBoxObj.textAfterCursor;
+		_onlineNameBoxObj.beingEdited = false;
+	}
+	if (_onlineKwBoxObj && _onlineKwBoxObj.beingEdited) {
+		_onlineKwBoxObj.text = inputText + _onlineKwBoxObj.textAfterCursor;
+		_onlineKwBoxObj.beingEdited = false;
+	}
 	canvas.setAttribute('contenteditable', false);
 }
 
@@ -11469,6 +11477,31 @@ async function onlineStartMatchmaking(levelIndex) {
 
 	const keyword = onlineKeyword.trim();
 	const queuePath = keyword ? ('online/queue_kw/' + keyword.replace(/[.#$\[\]]/g, '_')) : 'online/queue_' + levelIndex;
+
+	if (levelIndex === 1) {
+		const sessionId = onlineGenId();
+		onlineSessionId = sessionId;
+		onlineMySlot    = 0;
+		onlineOtherSlot = 1;
+		onlineOtherName = '';
+		await _fb_set(_fb_ref(_fbDb_online, 'online/sessions/' + sessionId + '/player0'), {
+			name: onlinePlayerName || 'Player', ready: true
+		});
+		await _fb_set(_fb_ref(_fbDb_online, queuePath), {
+			sessionId, level: levelIndex,
+			name: onlinePlayerName || 'Player',
+			ts: _fb_serverTimestamp()
+		});
+		const sessRef = _fb_ref(_fbDb_online, 'online/sessions/' + sessionId);
+		onlineUnsubMatch = _fb_onValue(sessRef, snap2 => {
+			const val = snap2.val();
+			if (val && val.player1 && onlineInGame) {
+				onlineOtherName = val.player1.name || 'Player';
+			}
+		});
+		onlineBeginGame();
+		return;
+	}
 
 	const snap = await _fb_get(_fb_ref(_fbDb_online, queuePath));
 	const existing = snap.val();
