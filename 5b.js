@@ -1,4 +1,3 @@
-
 /* For testing the performance of any block of code. It averages every 100 runs and prints to the console. To use, simply place the following around the code block you'd like to test:
 performanceTest(()=>{
 }); */
@@ -1977,7 +1976,7 @@ let lcMessageText = '';
 const lcZoomFactor = 2;
 let lcZoom = lcZoomFactor;
 let lcPan = [0,0];
-// const exploreTabNames = ['Featured', 'New', 'Top', 'ðŸ”'];
+// const exploreTabNames = ['Featured', 'New', 'Top', '🔍'];
 // const exploreTabWidths = [190, 115, 115, 45];
 const exploreTabNames = ['Levels', 'Levelpacks','Search'];
 const exploreTabWidths = [125, 200, 125];
@@ -2079,6 +2078,7 @@ let LCRect = [-1, -1, -1, -1];
 let levelTimer = 0;
 let levelTimer2 = 0;
 let bgXScale = 0;
+let bgYScale = 0;
 let bgYscale = 0;
 let stopX = 0;
 let stopY = 0;
@@ -3167,7 +3167,7 @@ function binarySearch({max, getValue, match}) {
 
 function fitString(context, str, maxWidth) {
 	let width = context.measureText(str).width;
-	const ellipsis = 'â€¦';
+	const ellipsis = '…';
 	const ellipsisWidth = context.measureText(ellipsis).width;
 	if (width <= maxWidth || width <= ellipsisWidth) {
 		return str;
@@ -9888,7 +9888,7 @@ function draw() {
 
 					if(exploreLevelPageLevel.featured) {
 						ctx.fillStyle = '#ffd900ff';
-						if(exploreLevelPageLevel.title.charAt(0) != 'â˜…') exploreLevelPageLevel.title = 'â˜… ' + exploreLevelPageLevel.title + " â˜…";
+						if(exploreLevelPageLevel.title.charAt(0) != '★') exploreLevelPageLevel.title = '★ ' + exploreLevelPageLevel.title + " ★";
 					}
 					else ctx.fillStyle = '#ffffff';
 					
@@ -11342,7 +11342,7 @@ function deselectAllTextBoxes() {
 }
 
 // ============================================================
-//  ONLINE MULTIPLAYER â€” Firebase Realtime Database
+//  ONLINE MULTIPLAYER — Firebase Realtime Database
 //  All Firebase calls are done via dynamic import at runtime.
 // ============================================================
 
@@ -11503,11 +11503,9 @@ function onlineBeginGame() {
 	onlineMyCharIndex    = playableIndices[onlineMySlot    % pCount];
 	onlineOtherCharIndex = playableIndices[onlineOtherSlot % pCount];
 
-	playMode    = 4;
+	playMode     = 4;
 	currentLevel = -1;
-	toSeeCS     = false;
-	wipeTimer   = 30;
-	menuScreen  = 3;
+	toSeeCS      = false;
 	transitionType = 1;
 
 	charCount  = allChars.length;
@@ -11549,24 +11547,21 @@ function onlineBeginGame() {
 	recover = false;
 	cornerHangTimer = 0;
 	charsAtEnd = 0;
-	control = onlineMyCharIndex;
 	cutScene = 0;
 	bgXScale = Math.max(((levelWidth - 32) * 10 + 960) / 9.6, 100);
 	bgYScale = Math.max(((levelHeight - 18) * 10 + 540) / 5.4, 100);
 	drawLevelBG();
+	control = onlineMyCharIndex;
 	cameraX = Math.min(Math.max(char[control].x - 480, 0), levelWidth * 30 - 960);
 	cameraY = Math.min(Math.max(char[control].y - 270, 0), levelHeight * 30 - 540);
 	gotThisCoin = false;
-	levelTimer  = 0;
+	levelTimer   = 0;
 	recoverTimer = 0;
-	levelTimer2 = getTimer();
-	doorLightFade = new Array(charCount2).fill(0);
+	levelTimer2  = getTimer();
+	doorLightFade     = new Array(charCount2).fill(0);
 	doorLightFadeDire = new Array(charCount2).fill(0);
-
-	control = onlineMyCharIndex;
 	charDepths[charDepths.indexOf(onlineMyCharIndex)] = charDepths[charCount * 2];
 	charDepths[charCount * 2] = onlineMyCharIndex;
-
 	onlineOtherX = char[onlineOtherCharIndex].x;
 	onlineOtherY = char[onlineOtherCharIndex].y;
 
@@ -11576,16 +11571,19 @@ function onlineBeginGame() {
 		if (!val) return;
 		const other = val['p' + onlineOtherSlot];
 		if (!other) return;
-		onlineOtherX    = other.x;
-		onlineOtherY    = other.y;
-		onlineOtherVx   = other.vx  || 0;
-		onlineOtherVy   = other.vy  || 0;
-		onlineOtherDire = other.dire || 4;
+		onlineOtherX     = other.x;
+		onlineOtherY     = other.y;
+		onlineOtherVx    = other.vx   || 0;
+		onlineOtherVy    = other.vy   || 0;
+		onlineOtherDire  = other.dire  || 4;
 		onlineOtherFrame = other.frame || 3;
-		onlineOtherLeg1 = other.leg1 || 0;
-		onlineOtherLeg2 = other.leg2 || 0;
-		onlineOtherOnob = other.onob || false;
+		onlineOtherLeg1  = other.leg1  || 0;
+		onlineOtherLeg2  = other.leg2  || 0;
+		onlineOtherOnob  = other.onob  || false;
 	});
+
+	wipeTimer  = 30;
+	menuScreen = 3;
 }
 
 function onlineSendState() {
