@@ -11479,26 +11479,41 @@ async function onlineStartMatchmaking(levelIndex) {
 	const queuePath = keyword ? ('online/queue_kw/' + keyword.replace(/[.#$\[\]]/g, '_')) : 'online/queue_' + levelIndex;
 
 	if (levelIndex === 1) {
-		const sessionId = onlineGenId();
-		onlineSessionId = sessionId;
-		onlineMySlot    = 0;
-		onlineOtherSlot = 1;
-		onlineOtherName = '';
-		await _fb_set(_fb_ref(_fbDb_online, 'online/sessions/' + sessionId + '/player0'), {
-			name: onlinePlayerName || 'Player', ready: true
-		});
-		await _fb_set(_fb_ref(_fbDb_online, queuePath), {
-			sessionId, level: levelIndex,
-			name: onlinePlayerName || 'Player',
-			ts: _fb_serverTimestamp()
-		});
-		const sessRef = _fb_ref(_fbDb_online, 'online/sessions/' + sessionId);
-		onlineUnsubMatch = _fb_onValue(sessRef, snap2 => {
-			const val = snap2.val();
-			if (val && val.player1 && onlineInGame) {
-				onlineOtherName = val.player1.name || 'Player';
-			}
-		});
+		const snap = await _fb_get(_fb_ref(_fbDb_online, queuePath));
+		const existing = snap.val();
+
+		if (existing && existing.level === levelIndex) {
+			onlineSessionId = existing.sessionId;
+			onlineMySlot    = 1;
+			onlineOtherSlot = 0;
+			onlineOtherName = existing.name || 'Player';
+			await _fb_remove(_fb_ref(_fbDb_online, queuePath));
+			await _fb_set(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/player1'), {
+				name: onlinePlayerName || 'Player', ready: true
+			});
+			await _fb_update(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId), { started: true });
+		} else {
+			const sessionId = onlineGenId();
+			onlineSessionId = sessionId;
+			onlineMySlot    = 0;
+			onlineOtherSlot = 1;
+			onlineOtherName = '';
+			await _fb_set(_fb_ref(_fbDb_online, 'online/sessions/' + sessionId + '/player0'), {
+				name: onlinePlayerName || 'Player', ready: true
+			});
+			await _fb_set(_fb_ref(_fbDb_online, queuePath), {
+				sessionId, level: levelIndex,
+				name: onlinePlayerName || 'Player',
+				ts: _fb_serverTimestamp()
+			});
+			const sessRef = _fb_ref(_fbDb_online, 'online/sessions/' + sessionId);
+			onlineUnsubMatch = _fb_onValue(sessRef, snap2 => {
+				const val = snap2.val();
+				if (val && val.player1 && onlineInGame) {
+					onlineOtherName = val.player1.name || 'Player';
+				}
+			});
+		}
 		onlineBeginGame();
 		return;
 	}
