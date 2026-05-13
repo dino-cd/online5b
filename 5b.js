@@ -4753,25 +4753,28 @@ function endDeath(i) {
 	putDown(i);
 	char[i].temp = 0;
 	if (!quirksMode) char[i].heated = 0;
+
+	if (onlineInGame && (i === onlineMyCharIndex || i === onlineOtherCharIndex)) {
+		const sl = startLocations[onlineSelectedLevel][i];
+		char[i].x = char[i].px = sl[1] * 30 + (sl[2] * 30) / 100;
+		char[i].y = char[i].py = sl[3] * 30 + (sl[4] * 30) / 100;
+		char[i].vx = char[i].vy = 0;
+		char[i].charState = sl[5] >= 9 ? sl[5] : 10;
+		char[i].deathTimer = 30;
+		char[i].onob = false;
+		fallOff(i);
+		return;
+	}
+
 	char[i].charState = 1;
-	// OG bug fix
 	if (!quirksMode && char[i].atEnd) {
 		doorLightFadeDire[charsAtEnd - 1] = -1;
 		charsAtEnd--;
 		char[i].atEnd = false;
 	}
 	deathCount++;
-	if (onlineInGame && (i === onlineMyCharIndex || i === onlineOtherCharIndex)) {
-		const sl = startLocations[onlineSelectedLevel][i];
-		char[i].x = char[i].px = sl[1] * 30 + (sl[2] * 30) / 100;
-		char[i].y = char[i].py = sl[3] * 30 + (sl[4] * 30) / 100;
-		char[i].vx = char[i].vy = 0;
-		char[i].charState = sl[5];
-		char[i].deathTimer = 30;
-	} else {
-		saveGame();
-		if (i == control && !onlineInGame) changeControl();
-	}
+	saveGame();
+	if (i == control && !onlineInGame) changeControl();
 }
 
 function bounce(i) {
@@ -7923,7 +7926,7 @@ function draw() {
 				}
 			}
 
-			if (_keysDown[82] && wipeTimer == 0) {
+			if (_keysDown[82] && wipeTimer == 0 && !onlineInGame) {
 				wipeTimer = 1;
 				transitionType = 0;
 				// if (cutScene == 1) csBubble.gotoAndPlay(17);
@@ -11391,6 +11394,7 @@ let onlineOtherFrame   = 3;
 let onlineOtherLeg1    = 0;
 let onlineOtherLeg2    = 0;
 let onlineOtherOnob    = false;
+let onlineOtherCarrying = false;
 let _onlineNameBoxObj  = null;
 let _onlineKwBoxObj    = null;
 
@@ -11545,15 +11549,16 @@ function onlineBeginGame() {
 		if (!val) return;
 		const other = val['p' + onlineOtherSlot];
 		if (!other) return;
-		onlineOtherX     = other.x;
-		onlineOtherY     = other.y;
-		onlineOtherVx    = other.vx   || 0;
-		onlineOtherVy    = other.vy   || 0;
-		onlineOtherDire  = other.dire  || 4;
-		onlineOtherFrame = other.frame || 3;
-		onlineOtherLeg1  = other.leg1  || 0;
-		onlineOtherLeg2  = other.leg2  || 0;
-		onlineOtherOnob  = other.onob  || false;
+		onlineOtherX        = other.x;
+		onlineOtherY        = other.y;
+		onlineOtherVx       = other.vx       || 0;
+		onlineOtherVy       = other.vy       || 0;
+		onlineOtherDire     = other.dire      || 4;
+		onlineOtherFrame    = other.frame     || 3;
+		onlineOtherLeg1     = other.leg1      || 0;
+		onlineOtherLeg2     = other.leg2      || 0;
+		onlineOtherOnob     = other.onob      || false;
+		onlineOtherCarrying = other.carrying  || false;
 	});
 
 	wipeTimer  = 30;
@@ -11564,16 +11569,21 @@ function onlineSendState() {
 	if (!onlineInGame || !onlineSessionId || !_fbDb_online) return;
 	const me = char[onlineMyCharIndex];
 	if (!me) return;
+	const carrying = me.carry && me.carryObject === onlineOtherCharIndex;
+	const beingCarried = char[onlineOtherCharIndex].carry &&
+	                     char[onlineOtherCharIndex].carryObject === onlineMyCharIndex;
+	if (beingCarried) return;
 	_fb_update(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/state/p' + onlineMySlot), {
-		x: Math.round(me.x * 10) / 10,
-		y: Math.round(me.y * 10) / 10,
-		vx: Math.round(me.vx * 100) / 100,
-		vy: Math.round(me.vy * 100) / 100,
-		dire: me.dire,
-		frame: me.frame,
-		leg1: me.leg1frame,
-		leg2: me.leg2frame,
-		onob: me.onob
+		x:        Math.round(me.x * 10) / 10,
+		y:        Math.round(me.y * 10) / 10,
+		vx:       Math.round(me.vx * 100) / 100,
+		vy:       Math.round(me.vy * 100) / 100,
+		dire:     me.dire,
+		frame:    me.frame,
+		leg1:     me.leg1frame,
+		leg2:     me.leg2frame,
+		onob:     me.onob,
+		carrying: carrying
 	});
 }
 
@@ -11581,19 +11591,30 @@ function onlineApplyOtherState() {
 	if (!onlineInGame) return;
 	const c = char[onlineOtherCharIndex];
 	if (!c || onlineOtherX === null) return;
-	c.x = onlineOtherX;
-	c.y = onlineOtherY;
-	c.vx = onlineOtherVx;
-	c.vy = onlineOtherVy;
-	c.dire = onlineOtherDire;
-	c.frame = onlineOtherFrame;
+
+	const iAmCarryingThem = char[onlineMyCharIndex].carry &&
+	                        char[onlineMyCharIndex].carryObject === onlineOtherCharIndex;
+	if (iAmCarryingThem) return;
+
+	if (!onlineOtherCarrying) {
+		c.x       = onlineOtherX;
+		c.y       = onlineOtherY;
+		c.vx      = onlineOtherVx;
+		c.vy      = onlineOtherVy;
+		c.onob    = onlineOtherOnob;
+	}
+	c.dire      = onlineOtherDire;
+	c.frame     = onlineOtherFrame;
 	c.leg1frame = onlineOtherLeg1;
 	c.leg2frame = onlineOtherLeg2;
-	c.onob = onlineOtherOnob;
 	c.justChanged = 2;
 }
 
 function onlineDisconnect() {
+	if (onlineInGame && char && onlineMyCharIndex >= 0) {
+		if (char[onlineMyCharIndex] && char[onlineMyCharIndex].carry) putDown(onlineMyCharIndex);
+		if (char[onlineOtherCharIndex] && char[onlineOtherCharIndex].carry) putDown(onlineOtherCharIndex);
+	}
 	if (onlineUnsubMatch && _fbDb_online) {
 		try { _fb_off(_fb_ref(_fbDb_online, 'online/queue_' + onlineSelectedLevel)); } catch(e){}
 		onlineUnsubMatch = null;
