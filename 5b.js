@@ -7931,6 +7931,17 @@ function draw() {
 				transitionType = 0;
 				// if (cutScene == 1) csBubble.gotoAndPlay(17);
 			}
+
+			if (onlineInGame) {
+				const beingCarried = char[onlineOtherCharIndex] &&
+				                     char[onlineOtherCharIndex].carry &&
+				                     char[onlineOtherCharIndex].carryObject === onlineMyCharIndex;
+				if (beingCarried) {
+					onlineWantEscape = _keysDown[32] || _keysDown[37] || _keysDown[38] || _keysDown[39] || _keysDown[40];
+				} else {
+					onlineWantEscape = false;
+				}
+			}
 			locations[4] = 1000;
 			for (let i = 0; i < charCount; i++) {
 				if (char[i].charState >= 5) {
@@ -11395,6 +11406,10 @@ let onlineOtherLeg1    = 0;
 let onlineOtherLeg2    = 0;
 let onlineOtherOnob    = false;
 let onlineOtherCarrying = false;
+let onlineOtherCarriedX = null;
+let onlineOtherCarriedY = null;
+let onlineWantEscape   = false;
+let onlineOtherWantsEscape = false;
 let _onlineNameBoxObj  = null;
 let _onlineKwBoxObj    = null;
 
@@ -11549,16 +11564,19 @@ function onlineBeginGame() {
 		if (!val) return;
 		const other = val['p' + onlineOtherSlot];
 		if (!other) return;
-		onlineOtherX        = other.x;
-		onlineOtherY        = other.y;
-		onlineOtherVx       = other.vx       || 0;
-		onlineOtherVy       = other.vy       || 0;
-		onlineOtherDire     = other.dire      || 4;
-		onlineOtherFrame    = other.frame     || 3;
-		onlineOtherLeg1     = other.leg1      || 0;
-		onlineOtherLeg2     = other.leg2      || 0;
-		onlineOtherOnob     = other.onob      || false;
-		onlineOtherCarrying = other.carrying  || false;
+		onlineOtherX            = other.x          ?? onlineOtherX;
+		onlineOtherY            = other.y          ?? onlineOtherY;
+		onlineOtherVx           = other.vx         || 0;
+		onlineOtherVy           = other.vy         || 0;
+		onlineOtherDire         = other.dire       || 4;
+		onlineOtherFrame        = other.frame      || 3;
+		onlineOtherLeg1         = other.leg1       || 0;
+		onlineOtherLeg2         = other.leg2       || 0;
+		onlineOtherOnob         = other.onob       || false;
+		onlineOtherCarrying     = other.carrying   || false;
+		onlineOtherCarriedX     = other.carriedX   ?? null;
+		onlineOtherCarriedY     = other.carriedY   ?? null;
+		onlineOtherWantsEscape  = other.escape     || false;
 	});
 
 	wipeTimer  = 30;
@@ -11568,12 +11586,20 @@ function onlineBeginGame() {
 function onlineSendState() {
 	if (!onlineInGame || !onlineSessionId || !_fbDb_online) return;
 	const me = char[onlineMyCharIndex];
+	const other = char[onlineOtherCharIndex];
 	if (!me) return;
-	const carrying = me.carry && me.carryObject === onlineOtherCharIndex;
-	const beingCarried = char[onlineOtherCharIndex].carry &&
-	                     char[onlineOtherCharIndex].carryObject === onlineMyCharIndex;
-	if (beingCarried) return;
-	_fb_update(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/state/p' + onlineMySlot), {
+
+	const iAmCarrying = me.carry && me.carryObject === onlineOtherCharIndex;
+	const iAmBeingCarried = other && other.carry && other.carryObject === onlineMyCharIndex;
+
+	if (iAmBeingCarried) {
+		_fb_update(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/state/p' + onlineMySlot), {
+			escape: onlineWantEscape
+		});
+		return;
+	}
+
+	const update = {
 		x:        Math.round(me.x * 10) / 10,
 		y:        Math.round(me.y * 10) / 10,
 		vx:       Math.round(me.vx * 100) / 100,
@@ -11583,31 +11609,69 @@ function onlineSendState() {
 		leg1:     me.leg1frame,
 		leg2:     me.leg2frame,
 		onob:     me.onob,
-		carrying: carrying
-	});
+		carrying: iAmCarrying,
+		escape:   false
+	};
+
+	if (iAmCarrying && other) {
+		update.carriedX = Math.round(other.x * 10) / 10;
+		update.carriedY = Math.round(other.y * 10) / 10;
+	}
+
+	_fb_update(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/state/p' + onlineMySlot), update);
 }
 
 function onlineApplyOtherState() {
 	if (!onlineInGame) return;
-	const c = char[onlineOtherCharIndex];
-	if (!c || onlineOtherX === null) return;
+	const me = char[onlineMyCharIndex];
+	const c  = char[onlineOtherCharIndex];
+	if (!c || !me || onlineOtherX === null) return;
 
-	const iAmCarryingThem = char[onlineMyCharIndex].carry &&
-	                        char[onlineMyCharIndex].carryObject === onlineOtherCharIndex;
-	if (iAmCarryingThem) return;
+	const iAmCarryingThem = me.carry && me.carryObject === onlineOtherCharIndex;
 
-	if (!onlineOtherCarrying) {
-		c.x       = onlineOtherX;
-		c.y       = onlineOtherY;
-		c.vx      = onlineOtherVx;
-		c.vy      = onlineOtherVy;
-		c.onob    = onlineOtherOnob;
+	if (iAmCarryingThem) {
+		if (onlineOtherWantsEscape) {
+			putDown(onlineMyCharIndex);
+			onlineOtherWantsEscape = false;
+		}
+		return;
 	}
+
 	c.dire      = onlineOtherDire;
 	c.frame     = onlineOtherFrame;
 	c.leg1frame = onlineOtherLeg1;
 	c.leg2frame = onlineOtherLeg2;
 	c.justChanged = 2;
+
+	if (onlineOtherCarrying && onlineOtherCarriedX !== null) {
+		me.x   = onlineOtherCarriedX;
+		me.y   = onlineOtherCarriedY;
+		me.vx  = 0;
+		me.vy  = 0;
+		me.onob = false;
+
+		if (c.carriedBy !== onlineMyCharIndex) {
+			c.carry        = true;
+			c.carryObject  = onlineOtherCharIndex;
+			me.carriedBy   = onlineOtherCharIndex;
+		}
+
+		c.x   = onlineOtherX;
+		c.y   = onlineOtherY;
+		c.vx  = onlineOtherVx;
+		c.vy  = onlineOtherVy;
+		c.onob = onlineOtherOnob;
+	} else {
+		if (me.carriedBy === onlineOtherCharIndex) {
+			me.carriedBy = -1;
+			c.carry      = false;
+		}
+		c.x    = onlineOtherX;
+		c.y    = onlineOtherY;
+		c.vx   = onlineOtherVx;
+		c.vy   = onlineOtherVy;
+		c.onob = onlineOtherOnob;
+	}
 }
 
 function onlineDisconnect() {
@@ -11615,6 +11679,11 @@ function onlineDisconnect() {
 		if (char[onlineMyCharIndex] && char[onlineMyCharIndex].carry) putDown(onlineMyCharIndex);
 		if (char[onlineOtherCharIndex] && char[onlineOtherCharIndex].carry) putDown(onlineOtherCharIndex);
 	}
+	onlineWantEscape        = false;
+	onlineOtherWantsEscape  = false;
+	onlineOtherCarrying     = false;
+	onlineOtherCarriedX     = null;
+	onlineOtherCarriedY     = null;
 	if (onlineUnsubMatch && _fbDb_online) {
 		try { _fb_off(_fb_ref(_fbDb_online, 'online/queue_' + onlineSelectedLevel)); } catch(e){}
 		onlineUnsubMatch = null;
