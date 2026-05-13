@@ -7803,6 +7803,39 @@ function draw() {
 				}
 			} else {
 				if (control < 1000) {
+					// Open chat with /
+					if (onlineInGame && !onlineChatting && _keysDown[191]) {
+						onlineChatting = true;
+						onlineChatInput = '';
+						inputText = '';
+					}
+					if (onlineChatting) {
+						// Typing — read inputText (managed by the key handler)
+						onlineChatInput = inputText;
+						// Enter to send
+						if (_keysDown[13]) {
+							if (!csPress && onlineChatInput.trim().length > 0) {
+								onlineMyChatMsg   = onlineChatInput.trim().slice(0, 64);
+								onlineMyChatTimer = cbdOnline;
+								// Push chat message to Firebase
+								if (_fbDb_online && onlineSessionId) {
+									_fb_set(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/chat/p' + onlineMySlot), {
+										msg: onlineMyChatMsg, ts: Date.now()
+									});
+								}
+							}
+							onlineChatting = false;
+							onlineChatInput = '';
+							inputText = '';
+							csPress = true;
+						} else csPress = false;
+						// Escape to cancel
+						if (_keysDown[27]) {
+							onlineChatting = false;
+							onlineChatInput = '';
+							inputText = '';
+						}
+					} else {
 					if (recover) {
 						char[control].justChanged = 2;
 						if (recoverTimer == 0) {
@@ -7924,6 +7957,7 @@ function draw() {
 						}
 					} else char[control].landTimer = 80;
 				}
+				} // end else (not chatting)
 			}
 
 			if (_keysDown[82] && wipeTimer == 0 && !onlineInGame) {
@@ -10636,6 +10670,7 @@ function draw() {
 		if (onlineInGame && menuScreen == 3) {
 			if (_frameCount % 2 === 0) onlineSendState();
 			onlineApplyOtherState();
+			tickOnlineChat();
 			const myName = onlinePlayerName || 'Player';
 			const theirName = onlineOtherName || 'Player';
 			ctx.save();
@@ -10643,6 +10678,22 @@ function draw() {
 			drawOnlineName(onlineMyCharIndex, myName);
 			drawOnlineName(onlineOtherCharIndex, theirName);
 			ctx.restore();
+			// Chat input bar at bottom of screen
+			if (onlineChatting) {
+				ctx.save();
+				ctx.fillStyle = 'rgba(0,0,0,0.65)';
+				ctx.fillRect(0, cheight - 36, cwidth, 36);
+				ctx.font = '18px Helvetica';
+				ctx.fillStyle = '#aaaaff';
+				ctx.textAlign = 'left';
+				ctx.textBaseline = 'middle';
+				ctx.fillText('Chat: ' + onlineChatInput + (_frameCount % 40 < 20 ? '|' : ''), 12, cheight - 18);
+				ctx.fillStyle = '#777777';
+				ctx.font = '13px Helvetica';
+				ctx.textAlign = 'right';
+				ctx.fillText('Enter to send  •  Esc to cancel', cwidth - 12, cheight - 18);
+				ctx.restore();
+			}
 		}
 		if (menuScreen != 3) {
 			cameraX = 0;
@@ -11352,6 +11403,7 @@ function deselectAllTextBoxes() {
 			textBoxes[i][j].beingEdited = false;
 		}
 	}
+	// Save and deselect the standalone online text boxes
 	if (_onlineNameBoxObj && _onlineNameBoxObj.beingEdited) {
 		_onlineNameBoxObj.text = inputText + _onlineNameBoxObj.textAfterCursor;
 		_onlineNameBoxObj.beingEdited = false;
@@ -11422,6 +11474,14 @@ let onlineOtherThrew   = false;
 let _onlinePrevCarrying = false;
 let onlineOtherThrewVx = 0;
 let onlineOtherThrewVy = -7.5;
+let onlineChatting     = false;
+let onlineChatInput    = '';
+let onlineMyChatMsg    = '';
+let onlineMyChatTimer  = 0;
+let onlineOtherChatMsg = '';
+let onlineOtherChatTimer = 0;
+let onlineOtherChatLastTs = 0; 
+const cbdOnline = 180;
 let _onlineNameBoxObj  = null;
 let _onlineKwBoxObj    = null;
 
@@ -11652,6 +11712,12 @@ function onlineBeginGame() {
 			onlineOtherThrewVx  = other.threwVx    ?? 0;
 			onlineOtherThrewVy  = other.threwVy    ?? -7.5;
 		}
+		const chatVal = val['chat'] && val['chat']['p' + onlineOtherSlot];
+		if (chatVal && chatVal.msg && chatVal.ts !== onlineOtherChatLastTs) {
+			onlineOtherChatLastTs = chatVal.ts;
+			onlineOtherChatMsg    = chatVal.msg;
+			onlineOtherChatTimer  = cbdOnline;
+		}
 	});
 
 	wipeTimer  = 30;
@@ -11772,6 +11838,13 @@ function onlineDisconnect() {
 	onlineOtherCarrying     = false;
 	onlineOtherCarriedX     = null;
 	onlineOtherCarriedY     = null;
+	onlineChatting          = false;
+	onlineChatInput         = '';
+	onlineMyChatMsg         = '';
+	onlineMyChatTimer       = 0;
+	onlineOtherChatMsg      = '';
+	onlineOtherChatTimer    = 0;
+	onlineOtherChatLastTs   = 0;
 	if (onlineUnsubMatch && _fbDb_online) {
 		try { _fb_off(_fb_ref(_fbDb_online, 'online/queue_' + onlineSelectedLevel)); } catch(e){}
 		onlineUnsubMatch = null;
@@ -11781,13 +11854,22 @@ function onlineDisconnect() {
 		onlineUnsubState = null;
 	}
 	if (onlineSessionId && _fbDb_online) {
-		_fb_remove(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId));
+		const url = 'https://dino-cd.github.io/online5b/';
+		try {
+			_fb_remove(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId));
+		} catch(e){}
 		onlineSessionId = null;
 	}
-	onlineInGame    = false;
+	onlineInGame      = false;
 	onlineMatchmaking = false;
-	onlineOtherX    = null;
+	onlineOtherX      = null;
 }
+
+window.addEventListener('beforeunload', () => { if (onlineInGame) onlineDisconnect(); });
+window.addEventListener('pagehide',     () => { if (onlineInGame) onlineDisconnect(); });
+document.addEventListener('visibilitychange', () => {
+	if (document.visibilityState === 'hidden' && onlineInGame) onlineDisconnect();
+});
 
 function onlineExitGame() {
 	onlineDisconnect();
@@ -11828,7 +11910,45 @@ function drawOnlineName(charIndex, displayName) {
 	_drawRoundedRectFill(ctx, tx - tw / 2, ty - 15, tw, 15, 3);
 	ctx.fillStyle = '#ffffff';
 	ctx.fillText(displayName, tx, ty);
+	const isMe = charIndex === onlineMyCharIndex;
+	const chatMsg   = isMe ? onlineMyChatMsg   : onlineOtherChatMsg;
+	const chatTimer = isMe ? onlineMyChatTimer  : onlineOtherChatTimer;
+	const typing    = isMe && onlineChatting;
+
+	if (typing || (chatMsg && chatTimer > 0)) {
+		const bubbleText = typing ? (onlineChatInput || '|') : chatMsg;
+		ctx.font = '12px Helvetica';
+		const bw = Math.min(ctx.measureText(bubbleText).width + 16, 200);
+		const bh = 22;
+		const bx = tx;
+		const by = ty - 15 - 8;
+		const alpha = chatTimer < 30 ? chatTimer / 30 : 1;
+		ctx.globalAlpha = typing ? 0.9 : alpha;
+		ctx.fillStyle = typing ? 'rgba(60,60,180,0.85)' : 'rgba(30,30,30,0.85)';
+		_drawRoundedRectFill(ctx, bx - bw / 2, by - bh, bw, bh, 5);
+		//tail
+		ctx.beginPath();
+		ctx.moveTo(bx - 5, by);
+		ctx.lineTo(bx + 5, by);
+		ctx.lineTo(bx, by + 6);
+		ctx.closePath();
+		ctx.fill();
+		ctx.globalAlpha = typing ? 0.9 : alpha;
+		ctx.fillStyle = '#ffffff';
+		ctx.textAlign = 'center';
+		ctx.textBaseline = 'middle';
+		let display = bubbleText;
+		while (display.length > 1 && ctx.measureText(display + '…').width > bw - 16) display = display.slice(0, -1);
+		if (display !== bubbleText) display += '…';
+		ctx.fillText(display, bx, by - bh / 2);
+		ctx.globalAlpha = 1;
+	}
 	ctx.restore();
+}
+
+function tickOnlineChat() {
+	if (onlineMyChatTimer  > 0) onlineMyChatTimer--;
+	if (onlineOtherChatTimer > 0) onlineOtherChatTimer--;
 }
 
 function _ensureOnlineBoxes() {
