@@ -11530,17 +11530,6 @@ function onlineBeginGame() {
 
 	console.log('[online] after loadLevelpack: levels[0]=', levels[0], 'startLocations[0]=', startLocations ? startLocations[0] : 'undef');
 
-	const playableIndices = [];
-	for (let i = 0; i < startLocations[onlineSelectedLevel].length; i++) {
-		if (startLocations[onlineSelectedLevel][i][5] >= 9) playableIndices.push(i);
-	}
-	if (playableIndices.length < 2) {
-		for (let i = 0; i < startLocations[onlineSelectedLevel].length; i++) playableIndices.push(i);
-	}
-	const pCount = playableIndices.length;
-	onlineMyCharIndex    = playableIndices[onlineMySlot    % pCount];
-	onlineOtherCharIndex = playableIndices[onlineOtherSlot % pCount];
-
 	currentLevel = onlineSelectedLevel;
 	transitionType = 1;
 
@@ -11552,41 +11541,36 @@ function onlineBeginGame() {
 		menuScreen = 12;
 		return;
 	}
-	resetLevel();
-	if (charCount === 0) {
-		charCount = 2;
-		char = new Array(2);
-		const spawnRow = levels[currentLevel][levelHeight - 1];
+	if (onlineSelectedLevel !== 1) {
+		const playableIndices = [];
+		for (let i = 0; i < startLocations[currentLevel].length; i++) {
+			if (startLocations[currentLevel][i][5] >= 9) playableIndices.push(i);
+		}
+		if (playableIndices.length < 2) {
+			for (let i = 0; i < startLocations[currentLevel].length; i++) playableIndices.push(i);
+		}
+		const pCount = playableIndices.length;
+		onlineMyCharIndex    = playableIndices[onlineMySlot    % pCount];
+		onlineOtherCharIndex = playableIndices[onlineOtherSlot % pCount];
+	}
+	if (onlineSelectedLevel === 1) {
+		const lw = levels[currentLevel][0].length;
+		const lh = levels[currentLevel].length;
+		const spawnRow = levels[currentLevel][lh - 1];
 		const spawnTiles = [];
-		for (let x = 0; x < levelWidth && spawnTiles.length < 2; x++) {
+		for (let x = 0; x < lw && spawnTiles.length < 2; x++) {
 			if (spawnRow[x] === tileIDFromChar('a'.charCodeAt(0))) spawnTiles.push(x);
 		}
 		while (spawnTiles.length < 2) spawnTiles.push(spawnTiles.length === 0 ? 3 : 28);
-		for (let i = 0; i < 2; i++) {
-			const id = i;
-			char[i] = new Character(
-				id,
-				spawnTiles[i] * 30,
-				(levelHeight - 2) * 30,
-				70 + i * 40,
-				400 - i * 30,
-				9,
-				charD[id][0], charD[id][1], charD[id][2], charD[id][2],
-				charD[id][3], charD[id][4], charD[id][6], charD[id][8],
-				id < 35 ? charModels[id].defaultExpr : 0
-			);
-			char[i].expr  = 1;
-			char[i].dire  = i === 0 ? 4 : 2;
-			char[i].frame = 1;
-		}
-		charDepths = new Array((charCount + 1) * 2).fill(-1);
-		for (let i = 0; i < charCount; i++) charDepths[i * 2] = Math.floor(charCount - i - 1);
-		charDepths[charCount * 2] = 0;
-		charDepth = levelWidth * levelHeight + charCount * 2;
-		charCount2 = 2;
-		onlineMyCharIndex    = onlineMySlot;
-		onlineOtherCharIndex = onlineOtherSlot;
+		startLocations[currentLevel] = [
+			[onlineMySlot    === 0 ? 0 : 1, spawnTiles[0], 0, lh - 2, 0, 9],
+			[onlineMySlot    === 0 ? 1 : 0, spawnTiles[1], 0, lh - 2, 0, 9]
+		];
+		onlineMyCharIndex    = 0;
+		onlineOtherCharIndex = 1;
 	}
+
+	resetLevel();
 
 	control = onlineMyCharIndex;
 	cameraX = Math.min(Math.max(char[control].x - 480, 0), levelWidth * 30 - 960);
