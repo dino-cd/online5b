@@ -11405,14 +11405,28 @@ async function onlineLoadLevels() {
 		while (i < lines.length) {
 			while (i < lines.length && lines[i].trim() === '') i++;
 			if (i >= lines.length) break;
+
 			const name = lines[i].trim();
-			const blockLines = [lines[i]];
 			i++;
-			while (i < lines.length && lines[i].trim() !== '') {
-				blockLines.push(lines[i]);
-				i++;
-			}
-			lvls.push({ name, data: blockLines.join('\r\n') });
+			if (i >= lines.length) break;
+
+			const meta = lines[i].split(',');
+			const h = parseInt(meta[1], 10);
+			const charCountL = parseInt(meta[2], 10);
+			if (isNaN(h) || isNaN(charCountL)) { i++; continue; }
+
+			const blockStart = i - 1;
+			i++;
+			i += h;
+			i += charCountL;
+			const diaCount = parseInt(lines[i] || '0', 10) || 0;
+			i++;
+			i += diaCount;
+			const blockEnd = i + 1;
+			i++;
+
+			const blockLines = lines.slice(blockStart, blockEnd);
+			lvls.push({ name, data: blockLines.join('\n') });
 		}
 		onlineLevelsData = lvls.length ? lvls : null;
 	} catch(e) {
@@ -11479,7 +11493,19 @@ function onlineBeginGame() {
 
 	playMode     = 4;
 	playingLevelpack = true;
+
+	console.log('[online] levels data:', onlineLevelsData);
+	if (!onlineLevelsData || !onlineLevelsData.length) {
+		console.error('[online] No level data — aborting');
+		onlineInGame = false;
+		menuScreen = 12;
+		return;
+	}
+	console.log('[online] level 0 data:\n', onlineLevelsData[0].data.slice(0, 300));
+
 	loadLevelpack(onlineLevelsData);
+
+	console.log('[online] after loadLevelpack: levels[0]=', levels[0], 'startLocations[0]=', startLocations ? startLocations[0] : 'undef');
 
 	const playableIndices = [];
 	for (let i = 0; i < startLocations[onlineSelectedLevel].length; i++) {
@@ -11494,6 +11520,15 @@ function onlineBeginGame() {
 
 	currentLevel = onlineSelectedLevel;
 	transitionType = 1;
+
+	if (!levels || !levels[currentLevel] || !levels[currentLevel][0]) {
+		console.error('[online] levels[' + currentLevel + '] not populated after loadLevelpack — aborting');
+		onlineInGame = false;
+		playMode = 1;
+		playingLevelpack = false;
+		menuScreen = 12;
+		return;
+	}
 	resetLevel();
 
 	control = onlineMyCharIndex;
