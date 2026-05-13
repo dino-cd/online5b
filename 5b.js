@@ -11410,6 +11410,10 @@ let onlineOtherCarriedX = null;
 let onlineOtherCarriedY = null;
 let onlineWantEscape   = false;
 let onlineOtherWantsEscape = false;
+let onlineOtherThrew   = false;
+let _onlinePrevCarrying = false;
+let onlineOtherThrewVx = 0;
+let onlineOtherThrewVy = -7.5;
 let _onlineNameBoxObj  = null;
 let _onlineKwBoxObj    = null;
 
@@ -11549,6 +11553,40 @@ function onlineBeginGame() {
 		return;
 	}
 	resetLevel();
+	if (charCount === 0) {
+		charCount = 2;
+		char = new Array(2);
+		const spawnRow = levels[currentLevel][levelHeight - 1];
+		const spawnTiles = [];
+		for (let x = 0; x < levelWidth && spawnTiles.length < 2; x++) {
+			if (spawnRow[x] === tileIDFromChar('a'.charCodeAt(0))) spawnTiles.push(x);
+		}
+		while (spawnTiles.length < 2) spawnTiles.push(spawnTiles.length === 0 ? 3 : 28);
+		for (let i = 0; i < 2; i++) {
+			const id = i;
+			char[i] = new Character(
+				id,
+				spawnTiles[i] * 30,
+				(levelHeight - 2) * 30,
+				70 + i * 40,
+				400 - i * 30,
+				9,
+				charD[id][0], charD[id][1], charD[id][2], charD[id][2],
+				charD[id][3], charD[id][4], charD[id][6], charD[id][8],
+				id < 35 ? charModels[id].defaultExpr : 0
+			);
+			char[i].expr  = 1;
+			char[i].dire  = i === 0 ? 4 : 2;
+			char[i].frame = 1;
+		}
+		charDepths = new Array((charCount + 1) * 2).fill(-1);
+		for (let i = 0; i < charCount; i++) charDepths[i * 2] = Math.floor(charCount - i - 1);
+		charDepths[charCount * 2] = 0;
+		charDepth = levelWidth * levelHeight + charCount * 2;
+		charCount2 = 2;
+		onlineMyCharIndex    = onlineMySlot;
+		onlineOtherCharIndex = onlineOtherSlot;
+	}
 
 	control = onlineMyCharIndex;
 	cameraX = Math.min(Math.max(char[control].x - 480, 0), levelWidth * 30 - 960);
@@ -11577,6 +11615,11 @@ function onlineBeginGame() {
 		onlineOtherCarriedX     = other.carriedX   ?? null;
 		onlineOtherCarriedY     = other.carriedY   ?? null;
 		onlineOtherWantsEscape  = other.escape     || false;
+		onlineOtherThrew        = other.threw      || false;
+		if (onlineOtherThrew) {
+			onlineOtherThrewVx  = other.threwVx    ?? 0;
+			onlineOtherThrewVy  = other.threwVy    ?? -7.5;
+		}
 	});
 
 	wipeTimer  = 30;
@@ -11598,6 +11641,8 @@ function onlineSendState() {
 		});
 		return;
 	}
+	const justThrew = _onlinePrevCarrying && !iAmCarrying;
+	_onlinePrevCarrying = iAmCarrying;
 
 	const update = {
 		x:        Math.round(me.x * 10) / 10,
@@ -11610,12 +11655,17 @@ function onlineSendState() {
 		leg2:     me.leg2frame,
 		onob:     me.onob,
 		carrying: iAmCarrying,
-		escape:   false
+		escape:   false,
+		threw:    justThrew
 	};
 
 	if (iAmCarrying && other) {
 		update.carriedX = Math.round(other.x * 10) / 10;
 		update.carriedY = Math.round(other.y * 10) / 10;
+	}
+	if (justThrew) {
+		update.threwVx = Math.round((me.vx + (me.dire <= 2 ? -3 : 3)) * 100) / 100;
+		update.threwVy = -7.5;
 	}
 
 	_fb_update(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/state/p' + onlineMySlot), update);
@@ -11665,6 +11715,12 @@ function onlineApplyOtherState() {
 		if (me.carriedBy === onlineOtherCharIndex) {
 			me.carriedBy = -1;
 			c.carry      = false;
+			if (onlineOtherThrew) {
+				me.vx  = onlineOtherThrewVx;
+				me.vy  = onlineOtherThrewVy;
+				me.onob = false;
+				onlineOtherThrew = false;
+			}
 		}
 		c.x    = onlineOtherX;
 		c.y    = onlineOtherY;
