@@ -7809,15 +7809,12 @@ function draw() {
 						onlineChatInput = '';
 						inputText = '';
 					}
-					if (onlineChatting) {
-						// Typing — read inputText (managed by the key handler)
+					if (onlineChatting) { //TODO delete all of this shit
 						onlineChatInput = inputText;
-						// Enter to send
 						if (_keysDown[13]) {
 							if (!csPress && onlineChatInput.trim().length > 0) {
 								onlineMyChatMsg   = onlineChatInput.trim().slice(0, 64);
 								onlineMyChatTimer = cbdOnline;
-								// Push chat message to Firebase
 								if (_fbDb_online && onlineSessionId) {
 									_fb_set(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/chat/p' + onlineMySlot), {
 										msg: onlineMyChatMsg, ts: Date.now()
