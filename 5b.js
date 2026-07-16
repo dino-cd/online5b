@@ -11415,7 +11415,7 @@ function deselectAllTextBoxes() {
 let _fbDb_online = null;
 let _fb_ref, _fb_set, _fb_get, _fb_onValue, _fb_off, _fb_remove, _fb_update, _fb_serverTimestamp, _fb_push;
 
-(async function _initFirebase() {
+(async function _initFirebase() { //!!!!!!!! TODO AND THE MOST IMPORTANT dont be a stupid guy and leak your api key like wtf 
 	const { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
 	const db_mod = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js");
 	const app = initializeApp({
@@ -11691,7 +11691,7 @@ function onlineBeginGame() {
 		if (!val) return;
 		const other = val['p' + onlineOtherSlot];
 		if (!other) return;
-		onlineOtherX            = other.x          ?? onlineOtherX;
+		onlineOtherX            = other.x          ?? onlineOtherX; //TODO secure the variables on the server side so no exploits (if that is even possiblle on firebase freetier)
 		onlineOtherY            = other.y          ?? onlineOtherY;
 		onlineOtherVx           = other.vx         || 0;
 		onlineOtherVy           = other.vy         || 0;
@@ -11892,7 +11892,7 @@ function _drawRoundedRectFill(context, x, y, w, h, r) {
 	context.fill();
 }
 
-function drawOnlineName(charIndex, displayName) {
+function drawOnlineName(charIndex, displayName) { //TODO: level coop???
 	if (!onlineInGame || !displayName) return;
 	const c = char[charIndex];
 	if (!c) return;
@@ -11912,7 +11912,7 @@ function drawOnlineName(charIndex, displayName) {
 	const chatTimer = isMe ? onlineMyChatTimer  : onlineOtherChatTimer;
 	const typing    = isMe && onlineChatting;
 
-	if (typing || (chatMsg && chatTimer > 0)) {
+	if (typing || (chatMsg && chatTimer > 0)) { //delete chat sincd no seawering ahhah
 		const bubbleText = typing ? (onlineChatInput || '|') : chatMsg;
 		ctx.font = '12px Helvetica';
 		const bw = Math.min(ctx.measureText(bubbleText).width + 16, 200);
@@ -11957,7 +11957,7 @@ function _ensureOnlineBoxes() {
 	}
 }
 
-function _drawOnlineMenuImpl() {
+function _drawOnlineMenuImpl() { //TODO: make everything looks good and not vibecoded slop like style :sob:
 	_ensureOnlineBoxes();
 
 	ctx.fillStyle = '#555555';
@@ -11967,12 +11967,6 @@ function _drawOnlineMenuImpl() {
 	ctx.globalAlpha = 0.3;
 	ctx.fillRect(0, 0, cwidth, cheight);
 	ctx.globalAlpha = 1;
-
-	ctx.textAlign = 'center';
-	ctx.textBaseline = 'top';
-	ctx.fillStyle = '#ffffff';
-	ctx.font = 'bold 48px Helvetica';
-	ctx.fillText('ONLINE', cwidth / 2, 28);
 
 	ctx.font = '20px Helvetica';
 	ctx.fillStyle = '#dddddd';
