@@ -2041,6 +2041,13 @@ let levelpackType; // 0 - from explore, 1 - from local saved levelpacks
 let lcCurrentSavedLevel = -1;
 let lcCurrentSavedLevelpack;
 let lcChangesMade;
+
+// coop level editor
+let lcCoopId = null;
+let lcCoopUnsub = null;
+let lcCoopLastOpKey = null;
+let lcCoopMyId = Math.random().toString(36).slice(2, 10);
+let lcCoopPendingFull = false;
 let myLevelsTab = 0;
 let myLevelsPage = 0;
 let myLevelsPageCount;
@@ -2457,6 +2464,11 @@ function myLevelsTextBoxes() {
 
 function menuExitLevelCreator() {
 	if (!lcChangesMade) {
+		if (lcCoopUnsub && _fbDb_online && lcCoopId) {
+			_fb_off(_fb_ref(_fbDb_online, 'levelcoop/' + lcCoopId + '/ops'));
+			lcCoopUnsub = null;
+		}
+		lcCoopId = null;
 		menuScreen = 0;
 	} else {
 		lcPopUpNextFrame = true;
@@ -5137,6 +5149,13 @@ function resetLevelCreator() {
 	lcChangesMade = false;
 	levelAlreadySharedToExplore = false;
 	lcPopUp = false;
+	if (lcCoopUnsub && _fbDb_online && lcCoopId) {
+		_fb_off(_fb_ref(_fbDb_online, 'levelcoop/' + lcCoopId + '/ops'));
+		lcCoopUnsub = null;
+	}
+	lcCoopId = null;
+	_lcCoopLastPushedTiles = null;
+	_lcCoopLastPushedMeta = null;
 	duplicateChar = false;
 	reorderCharUp = false;
 	reorderCharDown = false;
@@ -5636,6 +5655,9 @@ function updateLCtiles() {
 			}
 		}
 	}
+	if (lcCoopId && !lcCoopPendingFull) {
+		lcCoopSchedulePush('tiles');
+	}
 }
 
 function setTool(i) {
@@ -5879,6 +5901,7 @@ function drawLCCharInfo(i, y) {
 					}
 				}
 				duplicateChar = false;
+				lcCoopPushMeta();
 			}
 		} else if (reorderCharDown) {
 			if (mouseIsDown && !pmouseIsDown) {
@@ -5970,6 +5993,7 @@ function drawLCCharInfo(i, y) {
 							}
 						}
 					}
+					lcCoopPushMeta();
 				}
 			}
 		}
@@ -6099,6 +6123,7 @@ function drawLCDiaInfo(i, y) {
 					generateDialogueTextBoxes();
 					editingTextBox = false;
 					deselectAllTextBoxes();
+					lcCoopPushMeta();
 				}
 			}
 		}
@@ -7196,6 +7221,323 @@ function drawArrow(x, y, w, h, dir) {
 	ctx.fill();
 }
 
+// ---- coop level editor ----
+
+let _lcCoopPushTimer = null;
+let _lcCoopLastPushedTiles = null;
+let _lcCoopLastPushedMeta = null;
+let _lcCoopApplying = false;
+
+function lcCoopGenId() {
+	let s = '';
+	let chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+	for (let i = 0; i < 8; i++) s += chars[Math.floor(Math.random() * chars.length)];
+	return s;
+}
+
+// Canonical tile grid stored as flat string for fast diff: "w,h:v0,v1,v2,..."
+function lcCoopTilesFlat() {
+	let vals = [];
+	for (let y = 0; y < levelHeight; y++) {
+		for (let x = 0; x < levelWidth; x++) {
+			vals.push(myLevel[1][y][x]);
+		}
+	}
+	return levelWidth + ',' + levelHeight + ':' + vals.join(',');
+}
+
+// Compute changed tiles between two flat snapshots, same dimensions only.
+// Returns array of [x, y, newVal] for tiles that differ.
+function lcCoopTileDiff(oldFlat, newFlat) {
+	if (!oldFlat) return null; // signal full send needed
+	let oldColon = oldFlat.indexOf(':');
+	let newColon = newFlat.indexOf(':');
+	if (oldFlat.slice(0, oldColon) !== newFlat.slice(0, newColon)) return null; // dimensions changed, need full
+	let oldVals = oldFlat.slice(oldColon + 1).split(',');
+	let newVals = newFlat.slice(newColon + 1).split(',');
+	let w = levelWidth;
+	let diffs = [];
+	for (let i = 0; i < newVals.length; i++) {
+		if (oldVals[i] !== newVals[i]) {
+			diffs.push([i % w, Math.floor(i / w), parseInt(newVals[i], 10)]);
+		}
+	}
+	return diffs;
+}
+
+function lcCoopMetaSnapshot() {
+	return JSON.stringify({
+		name: myLevelInfo.name,
+		desc: myLevelInfo.desc,
+		bg: selectedBg,
+		w: levelWidth,
+		h: levelHeight,
+		nd: myLevelNecessaryDeaths,
+		chars: myLevelChars[1],
+		dia: myLevelDialogue[1]
+	});
+}
+
+function lcCoopSchedulePush(type) {
+	if (!lcCoopId || !_fbDb_online || _lcCoopApplying) return;
+	if (_lcCoopPushTimer) clearTimeout(_lcCoopPushTimer);
+	_lcCoopPushTimer = setTimeout(() => {
+		_lcCoopPushTimer = null;
+		if (!lcCoopId || !_fbDb_online) return;
+		let base = 'levelcoop/' + lcCoopId + '/ops';
+
+		let tilesNow = lcCoopTilesFlat();
+		if (tilesNow !== _lcCoopLastPushedTiles) {
+			let diff = lcCoopTileDiff(_lcCoopLastPushedTiles, tilesNow);
+			_lcCoopLastPushedTiles = tilesNow;
+			let op;
+			if (diff === null) {
+				// dimensions changed or first push — send full grid
+				op = {
+					by: lcCoopMyId,
+					t: 'tiles_full',
+					flat: tilesNow,
+					ts: _fb_serverTimestamp ? _fb_serverTimestamp() : Date.now()
+				};
+			} else if (diff.length > 0) {
+				// send only the changed tiles as a compact diff
+				op = {
+					by: lcCoopMyId,
+					t: 'tiles_diff',
+					diff: diff,
+					w: levelWidth,
+					h: levelHeight,
+					ts: _fb_serverTimestamp ? _fb_serverTimestamp() : Date.now()
+				};
+			}
+			if (op) {
+				_fb_push(_fb_ref(_fbDb_online, base), op).then(ref => {
+					lcCoopLastOpKey = ref.key;
+				});
+			}
+		}
+
+		let metaNow = lcCoopMetaSnapshot();
+		if (metaNow !== _lcCoopLastPushedMeta) {
+			_lcCoopLastPushedMeta = metaNow;
+			let meta = JSON.parse(metaNow);
+			let op = {
+				by: lcCoopMyId,
+				t: 'meta',
+				name: meta.name,
+				desc: meta.desc,
+				bg: meta.bg,
+				w: meta.w,
+				h: meta.h,
+				nd: meta.nd,
+				chars: meta.chars,
+				dia: meta.dia,
+				ts: _fb_serverTimestamp ? _fb_serverTimestamp() : Date.now()
+			};
+			_fb_push(_fb_ref(_fbDb_online, base), op);
+		}
+	}, 80);
+}
+
+function lcCoopApplyOp(op) {
+	if (!op || op.by === lcCoopMyId) return;
+	_lcCoopApplying = true;
+	try {
+		if (op.t === 'tiles_full') {
+			let colon = op.flat.indexOf(':');
+			let dims = op.flat.slice(0, colon).split(',');
+			let newW = parseInt(dims[0], 10);
+			let newH = parseInt(dims[1], 10);
+			let vals = op.flat.slice(colon + 1).split(',');
+			levelWidth = newW;
+			levelHeight = newH;
+			myLevel[1] = [];
+			for (let y = 0; y < newH; y++) {
+				myLevel[1][y] = [];
+				for (let x = 0; x < newW; x++) {
+					myLevel[1][y][x] = parseInt(vals[y * newW + x], 10) || 0;
+				}
+			}
+			_lcCoopLastPushedTiles = lcCoopTilesFlat();
+			setCoinAndDoorPos();
+		} else if (op.t === 'tiles_diff') {
+			// apply only the changed tiles — this is the conflict-safe path
+			// if level dimensions differ (someone resized), we have to wait for a full op
+			if (op.w !== levelWidth || op.h !== levelHeight) return;
+			for (let i = 0; i < op.diff.length; i++) {
+				let x = op.diff[i][0];
+				let y = op.diff[i][1];
+				let v = op.diff[i][2];
+				if (y < levelHeight && x < levelWidth) {
+					myLevel[1][y][x] = v;
+				}
+			}
+			// keep our pushed snapshot in sync so we don't re-push what we just received
+			_lcCoopLastPushedTiles = lcCoopTilesFlat();
+			setCoinAndDoorPos();
+		} else if (op.t === 'meta') {
+			if (op.name !== undefined) {
+				myLevelInfo.name = op.name;
+				if (textBoxes && textBoxes[0] && textBoxes[0][0]) textBoxes[0][0].text = op.name;
+			}
+			if (op.desc !== undefined) {
+				myLevelInfo.desc = op.desc;
+				if (textBoxes && textBoxes[0] && textBoxes[0][1]) textBoxes[0][1].text = op.desc;
+			}
+			if (op.bg !== undefined && op.bg !== selectedBg) {
+				selectedBg = op.bg;
+				setLCBG();
+			}
+			if (op.nd !== undefined) myLevelNecessaryDeaths = op.nd;
+			if (op.chars !== undefined) {
+				myLevelChars[1] = op.chars;
+				char = new Array(myLevelChars[1].length);
+				for (let i = 0; i < myLevelChars[1].length; i++) {
+					char[i] = generateCharFromInfo(myLevelChars[1][i]);
+				}
+			}
+			if (op.dia !== undefined) {
+				myLevelDialogue[1] = op.dia;
+				generateDialogueTextBoxes();
+			}
+			_lcCoopLastPushedMeta = lcCoopMetaSnapshot();
+		}
+	} finally {
+		_lcCoopApplying = false;
+	}
+	updateLCtiles();
+}
+
+function lcCoopSubscribe() {
+	if (!_fbDb_online || !lcCoopId) return;
+	if (lcCoopUnsub) {
+		_fb_off(_fb_ref(_fbDb_online, 'levelcoop/' + (lcCoopId || '') + '/ops'));
+		lcCoopUnsub = null;
+	}
+	let seenKeys = {};
+	let opsRef = _fb_ref(_fbDb_online, 'levelcoop/' + lcCoopId + '/ops');
+	// pre-mark all existing keys as seen (we already applied them)
+	_fb_get(opsRef).then(initSnap => {
+		let initVal = initSnap.val();
+		if (initVal) {
+			let initKeys = Object.keys(initVal);
+			for (let i = 0; i < initKeys.length; i++) seenKeys[initKeys[i]] = true;
+		}
+		lcCoopUnsub = _fb_onValue(opsRef, snap => {
+			let val = snap.val();
+			if (!val) return;
+			let keys = Object.keys(val).sort();
+			for (let i = 0; i < keys.length; i++) {
+				let k = keys[i];
+				if (seenKeys[k]) continue;
+				seenKeys[k] = true;
+				let op = val[k];
+				// only apply ops from other users
+				if (op.by !== lcCoopMyId) {
+					lcCoopApplyOp(op);
+				}
+			}
+		});
+	});
+}
+
+async function exposeLevelCoop() {
+	if (!_fbDb_online) {
+		setLCMessage('Firebase not ready, try again.');
+		return;
+	}
+	if (lcCoopId) {
+		setLCMessage('Already exposed.\nID: ' + lcCoopId);
+		return;
+	}
+	let id = lcCoopGenId();
+	lcCoopId = id;
+	_lcCoopLastPushedTiles = null;
+	_lcCoopLastPushedMeta = null;
+
+	let tilesOp = {
+		by: lcCoopMyId,
+		t: 'tiles_full',
+		flat: lcCoopTilesFlat(),
+		ts: _fb_serverTimestamp ? _fb_serverTimestamp() : Date.now()
+	};
+	let metaOp = {
+		by: lcCoopMyId,
+		t: 'meta',
+		name: myLevelInfo.name,
+		desc: myLevelInfo.desc,
+		bg: selectedBg,
+		w: levelWidth,
+		h: levelHeight,
+		nd: myLevelNecessaryDeaths,
+		chars: myLevelChars[1],
+		dia: myLevelDialogue[1],
+		ts: _fb_serverTimestamp ? _fb_serverTimestamp() : Date.now()
+	};
+	let base = 'levelcoop/' + id + '/ops';
+	await _fb_push(_fb_ref(_fbDb_online, base), tilesOp);
+	await _fb_push(_fb_ref(_fbDb_online, base), metaOp);
+	_lcCoopLastPushedTiles = lcCoopTilesFlat();
+	_lcCoopLastPushedMeta = lcCoopMetaSnapshot();
+	lcCoopSubscribe();
+	setLCMessage('Coop started!\nID: ' + id + '\nShare this with others.');
+}
+
+async function connectLevelCoop() {
+	if (!_fbDb_online) {
+		setLCMessage('Firebase not ready, try again.');
+		return;
+	}
+	let id = prompt('Enter coop ID:');
+	if (!id) return;
+	id = id.trim().toLowerCase();
+	if (!id) return;
+
+	let opsRef = _fb_ref(_fbDb_online, 'levelcoop/' + id + '/ops');
+	let snap = await _fb_get(opsRef);
+	if (!snap.val()) {
+		setLCMessage('No session found for that ID.');
+		return;
+	}
+
+	if (lcCoopUnsub) {
+		_fb_off(_fb_ref(_fbDb_online, 'levelcoop/' + (lcCoopId || '') + '/ops'));
+		lcCoopUnsub = null;
+	}
+	lcCoopId = id;
+	_lcCoopLastPushedTiles = null;
+	_lcCoopLastPushedMeta = null;
+
+	// Replay all ops in order to reconstruct current state
+	let val = snap.val();
+	let keys = Object.keys(val).sort();
+	_lcCoopApplying = true;
+	try {
+		for (let i = 0; i < keys.length; i++) {
+			let op = val[keys[i]];
+			// Apply regardless of who sent them — we're catching up to current state
+			let fakeOp = Object.assign({}, op, {by: '__remote__'});
+			lcCoopApplyOp(fakeOp);
+		}
+	} finally {
+		_lcCoopApplying = false;
+	}
+	_lcCoopLastPushedTiles = lcCoopTilesFlat();
+	_lcCoopLastPushedMeta = lcCoopMetaSnapshot();
+
+	lcCoopSubscribe();
+	setLCMessage('Connected to coop session: ' + id);
+}
+
+// hook meta changes (bg, entities, dialogue, size changes) into coop push
+function lcCoopPushMeta() {
+	if (lcCoopId && !lcCoopPendingFull && !_lcCoopApplying) {
+		lcCoopSchedulePush('meta');
+	}
+}
+
+// ---- end coop level editor ----
+
 function shareToExplore() {
 	postExploreLevelOrPack(myLevelInfo.name, myLevelInfo.desc, generateLevelString(), false);
 }
@@ -7562,6 +7904,7 @@ function keydown(event) {
 		} else if (currentTextBoxAllowsLineBreaks && (event.key == 'Enter' || event.key == 'Return') && event.shiftKey) {
 			inputText += '\n';
 		}
+		if (menuScreen == 5) lcCoopPushMeta();
 	}
 
 	// if (event.metaKey || event.ctrlKey) controlOrCommandPress = true;
@@ -8535,6 +8878,7 @@ function draw() {
 						if (mouseIsDown && !pmouseIsDown) {
 							myLevelNecessaryDeaths++;
 							lcChangesMade = true;
+							lcCoopPushMeta();
 						}
 					}
 					// ctx.fillStyle = '#33ee33';
@@ -8553,6 +8897,7 @@ function draw() {
 						if (mouseIsDown && !pmouseIsDown) {
 							myLevelNecessaryDeaths--;
 							lcChangesMade = true;
+							lcCoopPushMeta();
 						};
 					}
 
@@ -8670,6 +9015,7 @@ function draw() {
 									)
 								);
 								char[char.length - 1].placed = false;
+								lcCoopPushMeta();
 							}
 						}
 						addButtonPressed = true;
@@ -8773,6 +9119,7 @@ function draw() {
 							}
 							resetLCChar(charDropdown);
 							charDropdown = -2;
+							lcCoopPushMeta();
 						} else if (charDropdownType == 1) {
 							ctx.fillStyle = '#ffffff';
 							let textSize = 12.5;
@@ -8904,6 +9251,7 @@ function draw() {
 								}
 							}
 							charDropdown = -2;
+						lcCoopPushMeta();
 						}
 					}
 					if (charDropdown < -2) charDropdown = -charDropdown - 3;
@@ -9091,6 +9439,7 @@ function draw() {
 								selectedBg = i;
 								setLCBG();
 								updateLCtiles();
+								lcCoopPushMeta();
 							}
 						}
 						// ctx.drawImage(imgBgs[i],
@@ -9204,6 +9553,7 @@ function draw() {
 							setUndo();
 							myLevelDialogue[1].push({char: 99, face: 2, text: 'Enter text', linecount: 1});
 							generateDialogueTextBoxes();
+							lcCoopPushMeta();
 						}
 						addButtonPressed = true;
 					}
@@ -9294,6 +9644,15 @@ function draw() {
 					// }
 
 					drawSimpleButton(loggedInExploreUser5beamID ? 'Share to Explore' : 'Share to Explore as Guest', shareToExplore, 675, tabWindowY + 210, 270, 30, 3, '#ffffff', '#404040', '#666666', '#555555');
+					drawSimpleButton('Expose Level', exposeLevelCoop, 675, tabWindowY + 250, 130, 30, 3, '#ffffff', '#404040', '#666666', '#555555');
+					drawSimpleButton('Connect Level', connectLevelCoop, 815, tabWindowY + 250, 130, 30, 3, '#ffffff', '#404040', '#666666', '#555555');
+					if (lcCoopId) {
+						ctx.font = '14px Helvetica';
+						ctx.fillStyle = '#00cc44';
+						ctx.textAlign = 'left';
+						ctx.fillText('Coop ID: ' + lcCoopId, 675, tabWindowY + 292);
+						ctx.font = '23px Helvetica';
+					}
 					drawMenu0Button('EXIT', 846, cheight - 50, false, menuExitLevelCreator, 100);
 					// drawMenu2_3Button(0, 837.5, 486.95, menuExitLevelCreator);
 					break;
