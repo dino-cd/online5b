@@ -2042,7 +2042,6 @@ let lcCurrentSavedLevel = -1;
 let lcCurrentSavedLevelpack;
 let lcChangesMade;
 
-// coop level editor
 let lcCoopId = null;
 let lcCoopUnsub = null;
 let lcCoopLastOpKey = null;
@@ -2732,7 +2731,10 @@ function menuOnline() {
 	menuScreen = 12;
 	onlineLoadLevels();
 	_onlineNameBoxObj = null;
-	_onlineKwBoxObj   = null;
+	_onlineKwBoxObj = null;
+	if (Math.random() < 0.2) {
+		setTimeout(_onlineJanitor, 1500);
+	}
 }
 function menuExitOptions() {
 	menuScreen = 0;
@@ -7221,8 +7223,6 @@ function drawArrow(x, y, w, h, dir) {
 	ctx.fill();
 }
 
-// ---- coop level editor ----
-
 let _lcCoopPushTimer = null;
 let _lcCoopLastPushedTiles = null;
 let _lcCoopLastPushedMeta = null;
@@ -7235,7 +7235,6 @@ function lcCoopGenId() {
 	return s;
 }
 
-// Canonical tile grid stored as flat string for fast diff: "w,h:v0,v1,v2,..."
 function lcCoopTilesFlat() {
 	let vals = [];
 	for (let y = 0; y < levelHeight; y++) {
@@ -7246,13 +7245,11 @@ function lcCoopTilesFlat() {
 	return levelWidth + ',' + levelHeight + ':' + vals.join(',');
 }
 
-// Compute changed tiles between two flat snapshots, same dimensions only.
-// Returns array of [x, y, newVal] for tiles that differ.
 function lcCoopTileDiff(oldFlat, newFlat) {
-	if (!oldFlat) return null; // signal full send needed
+	if (!oldFlat) return null;
 	let oldColon = oldFlat.indexOf(':');
 	let newColon = newFlat.indexOf(':');
-	if (oldFlat.slice(0, oldColon) !== newFlat.slice(0, newColon)) return null; // dimensions changed, need full
+	if (oldFlat.slice(0, oldColon) !== newFlat.slice(0, newColon)) return null;
 	let oldVals = oldFlat.slice(oldColon + 1).split(',');
 	let newVals = newFlat.slice(newColon + 1).split(',');
 	let w = levelWidth;
@@ -7292,7 +7289,6 @@ function lcCoopSchedulePush(type) {
 			_lcCoopLastPushedTiles = tilesNow;
 			let op;
 			if (diff === null) {
-				// dimensions changed or first push — send full grid
 				op = {
 					by: lcCoopMyId,
 					t: 'tiles_full',
@@ -7300,7 +7296,6 @@ function lcCoopSchedulePush(type) {
 					ts: _fb_serverTimestamp ? _fb_serverTimestamp() : Date.now()
 				};
 			} else if (diff.length > 0) {
-				// send only the changed tiles as a compact diff
 				op = {
 					by: lcCoopMyId,
 					t: 'tiles_diff',
@@ -7361,8 +7356,6 @@ function lcCoopApplyOp(op) {
 			_lcCoopLastPushedTiles = lcCoopTilesFlat();
 			setCoinAndDoorPos();
 		} else if (op.t === 'tiles_diff') {
-			// apply only the changed tiles — this is the conflict-safe path
-			// if level dimensions differ (someone resized), we have to wait for a full op
 			if (op.w !== levelWidth || op.h !== levelHeight) return;
 			for (let i = 0; i < op.diff.length; i++) {
 				let x = op.diff[i][0];
@@ -7372,7 +7365,6 @@ function lcCoopApplyOp(op) {
 					myLevel[1][y][x] = v;
 				}
 			}
-			// keep our pushed snapshot in sync so we don't re-push what we just received
 			_lcCoopLastPushedTiles = lcCoopTilesFlat();
 			setCoinAndDoorPos();
 		} else if (op.t === 'meta') {
@@ -7416,7 +7408,6 @@ function lcCoopSubscribe() {
 	}
 	let seenKeys = {};
 	let opsRef = _fb_ref(_fbDb_online, 'levelcoop/' + lcCoopId + '/ops');
-	// pre-mark all existing keys as seen (we already applied them)
 	_fb_get(opsRef).then(initSnap => {
 		let initVal = initSnap.val();
 		if (initVal) {
@@ -7432,7 +7423,6 @@ function lcCoopSubscribe() {
 				if (seenKeys[k]) continue;
 				seenKeys[k] = true;
 				let op = val[k];
-				// only apply ops from other users
 				if (op.by !== lcCoopMyId) {
 					lcCoopApplyOp(op);
 				}
@@ -7508,14 +7498,12 @@ async function connectLevelCoop() {
 	_lcCoopLastPushedTiles = null;
 	_lcCoopLastPushedMeta = null;
 
-	// Replay all ops in order to reconstruct current state
 	let val = snap.val();
 	let keys = Object.keys(val).sort();
 	_lcCoopApplying = true;
 	try {
 		for (let i = 0; i < keys.length; i++) {
 			let op = val[keys[i]];
-			// Apply regardless of who sent them — we're catching up to current state
 			let fakeOp = Object.assign({}, op, {by: '__remote__'});
 			lcCoopApplyOp(fakeOp);
 		}
@@ -7529,14 +7517,11 @@ async function connectLevelCoop() {
 	setLCMessage('Connected to coop session: ' + id);
 }
 
-// hook meta changes (bg, entities, dialogue, size changes) into coop push
 function lcCoopPushMeta() {
 	if (lcCoopId && !lcCoopPendingFull && !_lcCoopApplying) {
 		lcCoopSchedulePush('meta');
 	}
 }
-
-// ---- end coop level editor ----
 
 function shareToExplore() {
 	postExploreLevelOrPack(myLevelInfo.name, myLevelInfo.desc, generateLevelString(), false);
@@ -7905,6 +7890,12 @@ function keydown(event) {
 			inputText += '\n';
 		}
 		if (menuScreen == 5) lcCoopPushMeta();
+	} else if (onlineChatting && event.key) {
+		if (event.key.length == 1 && !event.metaKey && !event.ctrlKey) {
+			onlineChatInput += event.key;
+		} else if (event.key == 'Backspace') {
+			onlineChatInput = onlineChatInput.slice(0, -1);
+		}
 	}
 
 	// if (event.metaKey || event.ctrlKey) controlOrCommandPress = true;
@@ -8150,13 +8141,11 @@ function draw() {
 					if (onlineInGame && !onlineChatting && _keysDown[191]) {
 						onlineChatting = true;
 						onlineChatInput = '';
-						inputText = '';
 					}
-					if (onlineChatting) { //TODO delete all of this shit
-						onlineChatInput = inputText;
+					if (onlineChatting) {
 						if (_keysDown[13]) {
 							if (!csPress && onlineChatInput.trim().length > 0) {
-								onlineMyChatMsg   = onlineChatInput.trim().slice(0, 64);
+								onlineMyChatMsg = onlineChatInput.trim().slice(0, 64);
 								onlineMyChatTimer = cbdOnline;
 								if (_fbDb_online && onlineSessionId) {
 									_fb_set(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/chat/p' + onlineMySlot), {
@@ -8166,14 +8155,12 @@ function draw() {
 							}
 							onlineChatting = false;
 							onlineChatInput = '';
-							inputText = '';
 							csPress = true;
 						} else csPress = false;
 						// Escape to cancel
 						if (_keysDown[27]) {
 							onlineChatting = false;
 							onlineChatInput = '';
-							inputText = '';
 						}
 					} else {
 					if (recover) {
@@ -10979,29 +10966,33 @@ function draw() {
 		case 13: {
 			ctx.fillStyle = '#666666';
 			ctx.fillRect(0, 0, cwidth, cheight);
-			ctx.fillStyle = '#000000';
-			ctx.globalAlpha = 0.35;
-			ctx.fillRect(0, 0, cwidth, cheight);
-			ctx.globalAlpha = 1;
 
-			ctx.font = 'bold 40px Helvetica';
+			ctx.fillStyle = '#808080';
+			ctx.fillRect(0, 0, cwidth, 65);
+			ctx.font = 'bold 35px Helvetica';
 			ctx.fillStyle = '#ffffff';
-			ctx.textAlign = 'center';
+			ctx.textAlign = 'left';
 			ctx.textBaseline = 'middle';
+			ctx.fillText('Online', 28, 33);
+
 			const dots = '.'.repeat((_frameCount >> 4) % 4);
-			ctx.fillText('Finding opponent' + dots, cwidth / 2, cheight / 2 - 30);
+			ctx.font = 'bold 30px Helvetica';
+			ctx.fillStyle = '#ffffff';
+			ctx.textAlign = 'left';
+			ctx.textBaseline = 'top';
+			ctx.fillText('Finding opponent' + dots, 28, 120);
 
 			ctx.font = '22px Helvetica';
 			ctx.fillStyle = '#aaaaaa';
-			ctx.fillText('Level: ' + (onlineLevelsData && onlineLevelsData[onlineSelectedLevel] ? onlineLevelsData[onlineSelectedLevel].name : ''), cwidth / 2, cheight / 2 + 20);
+			ctx.fillText('Level: ' + (onlineLevelsData && onlineLevelsData[onlineSelectedLevel] ? onlineLevelsData[onlineSelectedLevel].name : ''), 28, 164);
 			if (onlineKeyword.trim()) {
-				ctx.fillText('Code: ' + onlineKeyword.trim(), cwidth / 2, cheight / 2 + 50);
+				ctx.fillText('Code: ' + onlineKeyword.trim(), 28, 196);
 			}
 
-			drawMenu2_3Button(1, 837.5, 486.95, () => {
+			drawSimpleButton('Cancel', () => {
 				onlineDisconnect();
 				menuScreen = 12;
-			});
+			}, 28, 490 - 36, 100, 30, 3, '#ffffff', '#404040', '#606060', '#606060');
 			break;
 		}
 	}
@@ -11034,7 +11025,6 @@ function draw() {
 			drawOnlineName(onlineMyCharIndex, myName);
 			drawOnlineName(onlineOtherCharIndex, theirName);
 			ctx.restore();
-			// Chat input bar at bottom of screen
 			if (onlineChatting) {
 				ctx.save();
 				ctx.fillStyle = 'rgba(0,0,0,0.65)';
@@ -11759,7 +11749,6 @@ function deselectAllTextBoxes() {
 			textBoxes[i][j].beingEdited = false;
 		}
 	}
-	// Save and deselect the standalone online text boxes
 	if (_onlineNameBoxObj && _onlineNameBoxObj.beingEdited) {
 		_onlineNameBoxObj.text = inputText + _onlineNameBoxObj.textAfterCursor;
 		_onlineNameBoxObj.beingEdited = false;
@@ -11774,7 +11763,7 @@ function deselectAllTextBoxes() {
 let _fbDb_online = null;
 let _fb_ref, _fb_set, _fb_get, _fb_onValue, _fb_off, _fb_remove, _fb_update, _fb_serverTimestamp, _fb_push;
 
-(async function _initFirebase() { //!!!!!!!! TODO AND THE MOST IMPORTANT dont be a stupid guy and leak your api key like wtf 
+(async function _initFirebase() {
 	const { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
 	const db_mod = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js");
 	const app = initializeApp({
@@ -11798,48 +11787,108 @@ let _fb_ref, _fb_set, _fb_get, _fb_onValue, _fb_off, _fb_remove, _fb_update, _fb
 	_fb_serverTimestamp = db_mod.serverTimestamp;
 })();
 
-let onlinePlayerName   = '';
-let onlineKeyword      = '';
-let onlineLevelsData   = null;
+const _onlineStaleMs = 20000;
+const _onlineJanitorStaleMs = 30000;
+let _onlineQueueHeartbeat = null;
+
+async function _onlineJanitor() {
+	if (!_fbDb_online) return;
+	try {
+		const qSnap = await _fb_get(_fb_ref(_fbDb_online, 'online'));
+		const qVal = qSnap.val();
+		if (!qVal) return;
+		const now = Date.now();
+		const removes = [];
+		for (const key of Object.keys(qVal)) {
+			if (!key.startsWith('queue')) continue;
+			if (key === 'queue_kw') {
+				const kwVal = qVal[key];
+				if (!kwVal) continue;
+				for (const kw of Object.keys(kwVal)) {
+					const entry = kwVal[kw];
+					if (entry && entry.ts && now - entry.ts > _onlineJanitorStaleMs) {
+						removes.push(_fb_remove(_fb_ref(_fbDb_online, 'online/queue_kw/' + kw)));
+					}
+				}
+			} else {
+				const entry = qVal[key];
+				if (entry && entry.ts && now - entry.ts > _onlineJanitorStaleMs) {
+					removes.push(_fb_remove(_fb_ref(_fbDb_online, 'online/' + key)));
+				}
+			}
+		}
+		const sessions = qVal['sessions'];
+		if (sessions) {
+			for (const sid of Object.keys(sessions)) {
+				const sess = sessions[sid];
+				if (!sess) continue;
+				if (sess.ts && now - sess.ts > _onlineJanitorStaleMs) {
+					removes.push(_fb_remove(_fb_ref(_fbDb_online, 'online/sessions/' + sid)));
+				}
+			}
+		}
+		await Promise.all(removes);
+	} catch(e) {
+	}
+}
+
+function _onlineStartHeartbeat(queuePath) {
+	_onlineStopHeartbeat();
+	_onlineQueueHeartbeat = setInterval(() => {
+		if (!_fbDb_online || !queuePath) { _onlineStopHeartbeat(); return; }
+		_fb_update(_fb_ref(_fbDb_online, queuePath), { ts: Date.now() });
+	}, 5000);
+}
+
+function _onlineStopHeartbeat() {
+	if (_onlineQueueHeartbeat) {
+		clearInterval(_onlineQueueHeartbeat);
+		_onlineQueueHeartbeat = null;
+	}
+}
+
+let onlinePlayerName = '';
+let onlineKeyword = '';
+let onlineLevelsData = null;
 let onlineSelectedLevel = -1;
-let onlineSessionId    = null;
-let onlineMySlot       = -1;
-let onlineOtherSlot    = -1;
-let onlineMyCharIndex  = -1;
+let onlineSessionId = null;
+let onlineMySlot = -1;
+let onlineOtherSlot = -1;
+let onlineMyCharIndex = -1;
 let onlineOtherCharIndex = -1;
-let onlineOtherName    = '';
-let onlineUnsubMatch   = null;
-let onlineUnsubState   = null;
-let onlineMatchmaking  = false;
-let onlineInGame       = false;
-let onlineOtherX       = null;
-let onlineOtherY       = null;
-let onlineOtherVx      = 0;
-let onlineOtherVy      = 0;
-let onlineOtherDire    = 4;
-let onlineOtherFrame   = 3;
-let onlineOtherLeg1    = 0;
-let onlineOtherLeg2    = 0;
-let onlineOtherOnob    = false;
+let onlineOtherName = '';
+let onlineUnsubMatch = null;
+let onlineUnsubState = null;
+let onlineMatchmaking = false;
+let onlineInGame = false;
+let onlineOtherX = null;
+let onlineOtherY = null;
+let onlineOtherVx = 0;
+let onlineOtherVy = 0;
+let onlineOtherDire = 4;
+let onlineOtherFrame = 3;
+let onlineOtherLeg1 = 0;
+let onlineOtherLeg2 = 0;
+let onlineOtherOnob = false;
 let onlineOtherCarrying = false;
 let onlineOtherCarriedX = null;
 let onlineOtherCarriedY = null;
-let onlineWantEscape   = false;
+let onlineWantEscape = false;
 let onlineOtherWantsEscape = false;
-let onlineOtherThrew   = false;
+let onlineOtherThrew = false;
 let _onlinePrevCarrying = false;
 let onlineOtherThrewVx = 0;
 let onlineOtherThrewVy = -7.5;
-let onlineChatting     = false;
-let onlineChatInput    = '';
-let onlineMyChatMsg    = '';
-let onlineMyChatTimer  = 0;
+let onlineChatting = false;
+let onlineChatInput = '';
+let onlineMyChatMsg = '';
+let onlineMyChatTimer = 0;
 let onlineOtherChatMsg = '';
 let onlineOtherChatTimer = 0;
-let onlineOtherChatLastTs = 0; 
+let onlineOtherChatLastTs = 0;
 const cbdOnline = 180;
-let _onlineNameBoxObj  = null;
-let _onlineKwBoxObj    = null;
+let _onlineNameBoxObj = null;
+let _onlineKwBoxObj = null;
 
 async function onlineLoadLevels() {
 	if (onlineLevelsData) return;
@@ -11897,10 +11946,11 @@ async function onlineStartMatchmaking(levelIndex) {
 	if (levelIndex === 1) {
 		const snap = await _fb_get(_fb_ref(_fbDb_online, queuePath));
 		const existing = snap.val();
+		const stale = !existing || !existing.ts || (Date.now() - existing.ts > _onlineStaleMs) || existing.level !== levelIndex;
 
-		if (existing && existing.level === levelIndex) {
+		if (existing && !stale) {
 			onlineSessionId = existing.sessionId;
-			onlineMySlot    = 1;
+			onlineMySlot = 1;
 			onlineOtherSlot = 0;
 			onlineOtherName = existing.name || 'Player';
 			await _fb_remove(_fb_ref(_fbDb_online, queuePath));
@@ -11909,19 +11959,27 @@ async function onlineStartMatchmaking(levelIndex) {
 			});
 			await _fb_update(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId), { started: true });
 		} else {
+			if (existing && stale) {
+				try { await _fb_remove(_fb_ref(_fbDb_online, queuePath)); } catch(e) {}
+				if (existing.sessionId) {
+					try { await _fb_remove(_fb_ref(_fbDb_online, 'online/sessions/' + existing.sessionId)); } catch(e) {}
+				}
+			}
 			const sessionId = onlineGenId();
 			onlineSessionId = sessionId;
-			onlineMySlot    = 0;
+			onlineMySlot = 0;
 			onlineOtherSlot = 1;
 			onlineOtherName = '';
 			await _fb_set(_fb_ref(_fbDb_online, 'online/sessions/' + sessionId + '/player0'), {
 				name: onlinePlayerName || 'Player', ready: true
 			});
+			await _fb_update(_fb_ref(_fbDb_online, 'online/sessions/' + sessionId), { ts: Date.now() });
 			await _fb_set(_fb_ref(_fbDb_online, queuePath), {
 				sessionId, level: levelIndex,
 				name: onlinePlayerName || 'Player',
-				ts: _fb_serverTimestamp()
+				ts: Date.now()
 			});
+			_onlineStartHeartbeat(queuePath);
 			const sessRef = _fb_ref(_fbDb_online, 'online/sessions/' + sessionId);
 			onlineUnsubMatch = _fb_onValue(sessRef, snap2 => {
 				const val = snap2.val();
@@ -11936,12 +11994,13 @@ async function onlineStartMatchmaking(levelIndex) {
 
 	const snap = await _fb_get(_fb_ref(_fbDb_online, queuePath));
 	const existing = snap.val();
+	const stale = !existing || !existing.ts || (Date.now() - existing.ts > _onlineStaleMs) || existing.level !== levelIndex;
 
-	if (existing && existing.level === levelIndex) {
-		onlineSessionId  = existing.sessionId;
-		onlineMySlot     = 1;
-		onlineOtherSlot  = 0;
-		onlineOtherName  = existing.name || 'Player';
+	if (existing && !stale) {
+		onlineSessionId = existing.sessionId;
+		onlineMySlot = 1;
+		onlineOtherSlot = 0;
+		onlineOtherName = existing.name || 'Player';
 		await _fb_remove(_fb_ref(_fbDb_online, queuePath));
 		await _fb_set(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/player1'), {
 			name: onlinePlayerName || 'Player', ready: true
@@ -11949,18 +12008,26 @@ async function onlineStartMatchmaking(levelIndex) {
 		await _fb_update(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId), { started: true });
 		onlineBeginGame();
 	} else {
+		if (existing && stale) {
+			try { await _fb_remove(_fb_ref(_fbDb_online, queuePath)); } catch(e) {}
+			if (existing.sessionId) {
+				try { await _fb_remove(_fb_ref(_fbDb_online, 'online/sessions/' + existing.sessionId)); } catch(e) {}
+			}
+		}
 		const sessionId = onlineGenId();
 		onlineSessionId = sessionId;
-		onlineMySlot    = 0;
+		onlineMySlot = 0;
 		onlineOtherSlot = 1;
 		await _fb_set(_fb_ref(_fbDb_online, queuePath), {
 			sessionId, level: levelIndex,
 			name: onlinePlayerName || 'Player',
-			ts: _fb_serverTimestamp()
+			ts: Date.now()
 		});
 		await _fb_set(_fb_ref(_fbDb_online, 'online/sessions/' + sessionId + '/player0'), {
 			name: onlinePlayerName || 'Player', ready: true
 		});
+		await _fb_update(_fb_ref(_fbDb_online, 'online/sessions/' + sessionId), { ts: Date.now() });
+		_onlineStartHeartbeat(queuePath);
 		const sessRef = _fb_ref(_fbDb_online, 'online/sessions/' + sessionId);
 		onlineUnsubMatch = _fb_onValue(sessRef, snap2 => {
 			const val = snap2.val();
@@ -11968,6 +12035,7 @@ async function onlineStartMatchmaking(levelIndex) {
 				onlineOtherName = val.player1.name || 'Player';
 				_fb_off(sessRef);
 				onlineUnsubMatch = null;
+				_onlineStopHeartbeat();
 				onlineBeginGame();
 			}
 		});
@@ -11976,29 +12044,29 @@ async function onlineStartMatchmaking(levelIndex) {
 
 function onlineBeginGame() {
 	onlineMatchmaking = false;
-	onlineInGame      = true;
+	onlineInGame = true;
 
-	playMode     = 4;
+	playMode = 4;
 	playingLevelpack = true;
 
-	console.log('[online] levels data:', onlineLevelsData);
+	console.log('onlineservices levels data:', onlineLevelsData);
 	if (!onlineLevelsData || !onlineLevelsData.length) {
-		console.error('[online] No level data — aborting');
+		console.error('onlineservices No level data . redo..');
 		onlineInGame = false;
 		menuScreen = 12;
 		return;
 	}
-	console.log('[online] level 0 data:\n', onlineLevelsData[0].data.slice(0, 300));
+	console.log('onlineservices level 0 data:\n', onlineLevelsData[0].data.slice(0, 300));
 
 	loadLevelpack(onlineLevelsData);
 
-	console.log('[online] after loadLevelpack: levels[0]=', levels[0], 'startLocations[0]=', startLocations ? startLocations[0] : 'undef');
+	console.log('onlineservices after loadLevelpack: levels[0]=', levels[0], 'startLocations[0]=', startLocations ? startLocations[0] : 'undef');
 
 	currentLevel = onlineSelectedLevel;
 	transitionType = 1;
 
 	if (!levels || !levels[currentLevel] || !levels[currentLevel][0]) {
-		console.error('[online] levels[' + currentLevel + '] not populated after loadLevelpack — aborting');
+		console.error('onlineservices levels[' + currentLevel + '] not populated after loadLevelpack . redo..');
 		onlineInGame = false;
 		playMode = 1;
 		playingLevelpack = false;
@@ -12014,7 +12082,7 @@ function onlineBeginGame() {
 			for (let i = 0; i < startLocations[currentLevel].length; i++) playableIndices.push(i);
 		}
 		const pCount = playableIndices.length;
-		onlineMyCharIndex    = playableIndices[onlineMySlot    % pCount];
+		onlineMyCharIndex = playableIndices[onlineMySlot % pCount];
 		onlineOtherCharIndex = playableIndices[onlineOtherSlot % pCount];
 	}
 	if (onlineSelectedLevel === 1) {
@@ -12027,10 +12095,10 @@ function onlineBeginGame() {
 		}
 		while (spawnTiles.length < 2) spawnTiles.push(spawnTiles.length === 0 ? 3 : 28);
 		startLocations[currentLevel] = [
-			[onlineMySlot    === 0 ? 0 : 1, spawnTiles[0], 0, lh - 2, 0, 9],
-			[onlineMySlot    === 0 ? 1 : 0, spawnTiles[1], 0, lh - 2, 0, 9]
+			[onlineMySlot === 0 ? 0 : 1, spawnTiles[0], 0, lh - 2, 0, 9],
+			[onlineMySlot === 0 ? 1 : 0, spawnTiles[1], 0, lh - 2, 0, 9]
 		];
-		onlineMyCharIndex    = 0;
+		onlineMyCharIndex = 0;
 		onlineOtherCharIndex = 1;
 	}
 
@@ -12050,23 +12118,23 @@ function onlineBeginGame() {
 		if (!val) return;
 		const other = val['p' + onlineOtherSlot];
 		if (!other) return;
-		onlineOtherX            = other.x          ?? onlineOtherX; //TODO secure the variables on the server side so no exploits (if that is even possiblle on firebase freetier)
-		onlineOtherY            = other.y          ?? onlineOtherY;
-		onlineOtherVx           = other.vx         || 0;
-		onlineOtherVy           = other.vy         || 0;
-		onlineOtherDire         = other.dire       || 4;
-		onlineOtherFrame        = other.frame      || 3;
-		onlineOtherLeg1         = other.leg1       || 0;
-		onlineOtherLeg2         = other.leg2       || 0;
-		onlineOtherOnob         = other.onob       || false;
-		onlineOtherCarrying     = other.carrying   || false;
-		onlineOtherCarriedX     = other.carriedX   ?? null;
-		onlineOtherCarriedY     = other.carriedY   ?? null;
-		onlineOtherWantsEscape  = other.escape     || false;
-		onlineOtherThrew        = other.threw      || false;
+		onlineOtherX = other.x ?? onlineOtherX;
+		onlineOtherY = other.y ?? onlineOtherY;
+		onlineOtherVx = other.vx || 0;
+		onlineOtherVy = other.vy || 0;
+		onlineOtherDire = other.dire || 4;
+		onlineOtherFrame = other.frame || 3;
+		onlineOtherLeg1 = other.leg1 || 0;
+		onlineOtherLeg2 = other.leg2 || 0;
+		onlineOtherOnob = other.onob || false;
+		onlineOtherCarrying = other.carrying || false;
+		onlineOtherCarriedX = other.carriedX ?? null;
+		onlineOtherCarriedY = other.carriedY ?? null;
+		onlineOtherWantsEscape = other.escape || false;
+		onlineOtherThrew = other.threw || false;
 		if (onlineOtherThrew) {
-			onlineOtherThrewVx  = other.threwVx    ?? 0;
-			onlineOtherThrewVy  = other.threwVy    ?? -7.5;
+			onlineOtherThrewVx = other.threwVx ?? 0;
+			onlineOtherThrewVy = other.threwVy ?? -7.5;
 		}
 		const chatVal = val['chat'] && val['chat']['p' + onlineOtherSlot];
 		if (chatVal && chatVal.msg && chatVal.ts !== onlineOtherChatLastTs) {
@@ -12076,7 +12144,7 @@ function onlineBeginGame() {
 		}
 	});
 
-	wipeTimer  = 30;
+	wipeTimer = 30;
 	menuScreen = 3;
 }
 
@@ -12189,22 +12257,23 @@ function onlineDisconnect() {
 		if (char[onlineMyCharIndex] && char[onlineMyCharIndex].carry) putDown(onlineMyCharIndex);
 		if (char[onlineOtherCharIndex] && char[onlineOtherCharIndex].carry) putDown(onlineOtherCharIndex);
 	}
-	onlineWantEscape        = false;
-	onlineOtherWantsEscape  = false;
-	onlineOtherCarrying     = false;
-	onlineOtherCarriedX     = null;
-	onlineOtherCarriedY     = null;
-	onlineChatting          = false;
-	onlineChatInput         = '';
-	onlineMyChatMsg         = '';
-	onlineMyChatTimer       = 0;
-	onlineOtherChatMsg      = '';
-	onlineOtherChatTimer    = 0;
-	onlineOtherChatLastTs   = 0;
+	onlineWantEscape = false;
+	onlineOtherWantsEscape = false;
+	onlineOtherCarrying = false;
+	onlineOtherCarriedX = null;
+	onlineOtherCarriedY = null;
+	onlineChatting = false;
+	onlineChatInput = '';
+	onlineMyChatMsg = '';
+	onlineMyChatTimer = 0;
+	onlineOtherChatMsg = '';
+	onlineOtherChatTimer = 0;
+	onlineOtherChatLastTs = 0;
 	if (onlineUnsubMatch && _fbDb_online) {
 		try { _fb_off(_fb_ref(_fbDb_online, 'online/queue_' + onlineSelectedLevel)); } catch(e){}
 		onlineUnsubMatch = null;
 	}
+	_onlineStopHeartbeat();
 	if (onlineUnsubState && _fbDb_online && onlineSessionId) {
 		try { _fb_off(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/state')); } catch(e){}
 		onlineUnsubState = null;
@@ -12216,9 +12285,9 @@ function onlineDisconnect() {
 		} catch(e){}
 		onlineSessionId = null;
 	}
-	onlineInGame      = false;
+	onlineInGame = false;
 	onlineMatchmaking = false;
-	onlineOtherX      = null;
+	onlineOtherX = null;
 }
 
 window.addEventListener('beforeunload', () => { if (onlineInGame) onlineDisconnect(); });
@@ -12230,9 +12299,9 @@ document.addEventListener('visibilitychange', () => {
 function onlineExitGame() {
 	onlineDisconnect();
 	playingLevelpack = false;
-	playMode  = 1;
-	cameraX   = 0;
-	cameraY   = 0;
+	playMode = 1;
+	cameraX = 0;
+	cameraY = 0;
 	menuScreen = 12;
 }
 
@@ -12251,7 +12320,7 @@ function _drawRoundedRectFill(context, x, y, w, h, r) {
 	context.fill();
 }
 
-function drawOnlineName(charIndex, displayName) { //TODO: level coop???
+function drawOnlineName(charIndex, displayName) {
 	if (!onlineInGame || !displayName) return;
 	const c = char[charIndex];
 	if (!c) return;
@@ -12271,7 +12340,7 @@ function drawOnlineName(charIndex, displayName) { //TODO: level coop???
 	const chatTimer = isMe ? onlineMyChatTimer  : onlineOtherChatTimer;
 	const typing    = isMe && onlineChatting;
 
-	if (typing || (chatMsg && chatTimer > 0)) { //delete chat sincd no seawering ahhah
+	if (typing || (chatMsg && chatTimer > 0)) {
 		const bubbleText = typing ? (onlineChatInput || '|') : chatMsg;
 		ctx.font = '12px Helvetica';
 		const bw = Math.min(ctx.measureText(bubbleText).width + 16, 200);
@@ -12282,7 +12351,6 @@ function drawOnlineName(charIndex, displayName) { //TODO: level coop???
 		ctx.globalAlpha = typing ? 0.9 : alpha;
 		ctx.fillStyle = typing ? 'rgba(60,60,180,0.85)' : 'rgba(30,30,30,0.85)';
 		_drawRoundedRectFill(ctx, bx - bw / 2, by - bh, bw, bh, 5);
-		//tail
 		ctx.beginPath();
 		ctx.moveTo(bx - 5, by);
 		ctx.lineTo(bx + 5, by);
@@ -12309,66 +12377,69 @@ function tickOnlineChat() {
 
 function _ensureOnlineBoxes() {
 	if (!_onlineNameBoxObj) {
-		_onlineNameBoxObj = new TextBox(onlinePlayerName, 344, 280, 280, 36, '#444444', '#ffffff', '#888888', 22, 22, 'Helvetica', false, [8, 7, 8, 7], 1, 8, false);
+		_onlineNameBoxObj = new TextBox(onlinePlayerName, 28, 118, 340, 36, '#444444', '#ffffff', '#888888', 22, 22, 'Helvetica', false, [8, 7, 8, 7], 1, 8, false);
 	}
 	if (!_onlineKwBoxObj) {
-		_onlineKwBoxObj = new TextBox(onlineKeyword, 344, 350, 280, 36, '#444444', '#ffffff', '#888888', 22, 22, 'Helvetica', false, [8, 7, 8, 7], 1, 8, false);
+		_onlineKwBoxObj = new TextBox(onlineKeyword, 28, 216, 340, 36, '#444444', '#ffffff', '#888888', 22, 22, 'Helvetica', false, [8, 7, 8, 7], 1, 8, false);
 	}
 }
 
-function _drawOnlineMenuImpl() { //TODO: make everything looks good and not vibecoded slop like style :sob:
+function _drawOnlineMenuImpl() {
 	_ensureOnlineBoxes();
 
-	ctx.fillStyle = '#555555';
+	ctx.fillStyle = '#666666';
 	ctx.fillRect(0, 0, cwidth, cheight);
 
-	ctx.fillStyle = '#000000';
-	ctx.globalAlpha = 0.3;
-	ctx.fillRect(0, 0, cwidth, cheight);
-	ctx.globalAlpha = 1;
-
-	ctx.font = '20px Helvetica';
-	ctx.fillStyle = '#dddddd';
+	ctx.fillStyle = '#808080';
+	ctx.fillRect(0, 0, cwidth, 65);
+	ctx.font = 'bold 35px Helvetica';
+	ctx.fillStyle = '#ffffff';
 	ctx.textAlign = 'left';
-	ctx.fillText('Your Name:', 344, 256);
-	_onlineNameBoxObj.y = 280;
+	ctx.textBaseline = 'middle';
+	ctx.fillText('Online', 28, 33);
+
+	ctx.font = '22px Helvetica';
+	ctx.fillStyle = '#ffffff';
+	ctx.textAlign = 'left';
+	ctx.textBaseline = 'top';
+	ctx.fillText('Your name', 28, 92);
+	_onlineNameBoxObj.x = 28;
+	_onlineNameBoxObj.y = 118;
 	_onlineNameBoxObj.draw();
 	onlinePlayerName = _onlineNameBoxObj.text;
 
-	ctx.fillStyle = '#dddddd';
-	ctx.fillText('Private Code  (optional):', 344, 323);
-	_onlineKwBoxObj.y = 348;
+	ctx.fillText('Private code', 28, 172);
+	ctx.font = '18px Helvetica';
+	ctx.fillStyle = '#aaaaaa';
+	ctx.fillText('You and a friend with the same code will only match each other.', 28, 196);
+	_onlineKwBoxObj.x = 28;
+	_onlineKwBoxObj.y = 216;
 	_onlineKwBoxObj.draw();
 	onlineKeyword = _onlineKwBoxObj.text;
 
-	ctx.font = '13px Helvetica';
-	ctx.fillStyle = '#aaaaaa';
-	ctx.textAlign = 'center';
-	ctx.fillText('If you and a friend both enter the same code, you will only match with each other.', cwidth / 2, 392);
+	ctx.font = '22px Helvetica';
+	ctx.fillStyle = '#ffffff';
+	ctx.textAlign = 'left';
+	ctx.textBaseline = 'top';
+	ctx.fillText('Select level', 28, 278);
 
 	if (!onlineLevelsData) {
 		onlineLoadLevels();
+		ctx.font = '20px Helvetica';
 		ctx.fillStyle = '#aaaaaa';
-		ctx.font = '22px Helvetica';
-		ctx.textAlign = 'center';
-		ctx.textBaseline = 'middle';
-		ctx.fillText('Loading levels...', cwidth / 2, 460);
-	} else {
-		ctx.font = 'bold 22px Helvetica';
-		ctx.fillStyle = '#ffffff';
-		ctx.textAlign = 'center';
+		ctx.textAlign = 'left';
 		ctx.textBaseline = 'top';
-		ctx.fillText('Select a Level to Play:', cwidth / 2, 415);
-
-		const btnW = 220, btnH = 44, btnGap = 22;
-		const total = onlineLevelsData.length;
-		const totalW = total * btnW + (total - 1) * btnGap;
-		let bx = (cwidth - totalW) / 2;
-		for (let i = 0; i < total; i++) {
-			const by = 447;
+		ctx.fillText('Loading...', 28, 308);
+	} else {
+		let bx = 28;
+		let by = 308;
+		let btnH = 44;
+		let btnGap = 14;
+		for (let i = 0; i < onlineLevelsData.length; i++) {
+			ctx.font = 'bold 20px Helvetica';
+			let btnW = Math.max(ctx.measureText(onlineLevelsData[i].name).width + 40, 160);
 			let fill = '#444444';
-			const hov = onRect(_xmouse, _ymouse, bx, by, btnW, btnH);
-			if (hov) {
+			if (onRect(_xmouse, _ymouse, bx, by, btnW, btnH)) {
 				onButton = true;
 				fill = '#606060';
 				if (mousePressedLastFrame && onRect(lastClickX, lastClickY, bx, by, btnW, btnH)) {
@@ -12377,14 +12448,10 @@ function _drawOnlineMenuImpl() { //TODO: make everything looks good and not vibe
 			}
 			ctx.fillStyle = fill;
 			ctx.fillRect(bx, by, btnW, btnH);
-			ctx.strokeStyle = '#888888';
-			ctx.lineWidth = 2;
-			ctx.strokeRect(bx, by, btnW, btnH);
 			ctx.fillStyle = '#ffffff';
-			ctx.font = 'bold 19px Helvetica';
-			ctx.textAlign = 'center';
+			ctx.textAlign = 'left';
 			ctx.textBaseline = 'middle';
-			ctx.fillText(onlineLevelsData[i].name, bx + btnW / 2, by + btnH / 2);
+			ctx.fillText(onlineLevelsData[i].name, bx + 14, by + btnH / 2);
 			bx += btnW + btnGap;
 		}
 	}
