@@ -2047,6 +2047,14 @@ let lcCoopUnsub = null;
 let lcCoopLastOpKey = null;
 let lcCoopMyId = Math.random().toString(36).slice(2, 10);
 let lcCoopPendingFull = false;
+let lcCoopShowCursors = true;
+let lcCoopCursorPushTimer = null;
+let lcCoopCursorUnsub = null;
+let lcCoopRemoteCursors = {};
+
+let deathSpots = {};
+let deathSpotsKey = null;
+let deathSpotsLoaded = false;
 let myLevelsTab = 0;
 let myLevelsPage = 0;
 let myLevelsPageCount;
@@ -2467,6 +2475,7 @@ function menuExitLevelCreator() {
 			_fb_off(_fb_ref(_fbDb_online, 'levelcoop/' + lcCoopId + '/ops'));
 			lcCoopUnsub = null;
 		}
+		lcCoopStopCursorPush();
 		lcCoopId = null;
 		menuScreen = 0;
 	} else {
@@ -2584,6 +2593,7 @@ function playExploreLevel(continueGame=false) {
 		testLevelCreator();
 		playingLevelpack = false;
 		playMode = 3;
+		loadDeathSpots();
 	} else {
 		loadLevelpack(exploreLevelPageLevel.levels);
 		clearVars();
@@ -3210,8 +3220,8 @@ function playLevel(i) {
 function resetLevel() {
 	HPRCBubbleFrame = 0;
 	tileDepths = [[], [], [], []];
+	loadDeathSpots();
 	if (playMode == 2) {
-		charCount = myLevelChars[1].length;
 		levelWidth = myLevel[1][0].length;
 		levelHeight = myLevel[1].length;
 
@@ -4758,8 +4768,8 @@ function startDeath(i) {
 		char[i].leg2frame = 1;
 		char[i].leg1skew = 0;
 		char[i].leg2skew = 0;
-
 		char[i].frame = 7 + Math.ceil(char[i].dire / 2);
+		recordDeathSpot(char[i].x, char[i].y);
 	}
 }
 
@@ -5155,6 +5165,7 @@ function resetLevelCreator() {
 		_fb_off(_fb_ref(_fbDb_online, 'levelcoop/' + lcCoopId + '/ops'));
 		lcCoopUnsub = null;
 	}
+	lcCoopStopCursorPush();
 	lcCoopId = null;
 	_lcCoopLastPushedTiles = null;
 	_lcCoopLastPushedMeta = null;
@@ -7470,6 +7481,8 @@ async function exposeLevelCoop() {
 	_lcCoopLastPushedTiles = lcCoopTilesFlat();
 	_lcCoopLastPushedMeta = lcCoopMetaSnapshot();
 	lcCoopSubscribe();
+	lcCoopStartCursorPush();
+	lcCoopStartCursorListen();
 	setLCMessage('Coop started!\nID: ' + id + '\nShare this with others.');
 }
 
@@ -7514,6 +7527,8 @@ async function connectLevelCoop() {
 	_lcCoopLastPushedMeta = lcCoopMetaSnapshot();
 
 	lcCoopSubscribe();
+	lcCoopStartCursorPush();
+	lcCoopStartCursorListen();
 	setLCMessage('Connected to coop session: ' + id);
 }
 
@@ -7521,6 +7536,139 @@ function lcCoopPushMeta() {
 	if (lcCoopId && !lcCoopPendingFull && !_lcCoopApplying) {
 		lcCoopSchedulePush('meta');
 	}
+}
+
+function getDeathSpotsKey() {
+	if (playMode == 3 && exploreLevelPageLevel && exploreLevelPageLevel.id) {
+		return 'deathspots/e/' + exploreLevelPageLevel.id;
+	}
+	if (playMode == 4) {
+		return 'deathspots/o/' + onlineSelectedLevel;
+	}
+	if (!playingLevelpack) {
+		return 'deathspots/v/' + currentLevel;
+	}
+	return null;
+}
+
+function loadDeathSpots() {
+	let key = getDeathSpotsKey();
+	if (!key || !_fbDb_online) return;
+	if (key === deathSpotsKey && deathSpotsLoaded) return;
+	deathSpotsKey = key;
+	deathSpotsLoaded = false;
+	deathSpots[key] = [];
+	_fb_get(_fb_ref(_fbDb_online, key)).then(snap => {
+		let val = snap.val();
+		if (!val) { deathSpotsLoaded = true; return; }
+		let entries = Object.values(val);
+		deathSpots[key] = entries.slice(-400);
+		deathSpotsLoaded = true;
+	}).catch(() => { deathSpotsLoaded = true; });
+}
+
+function recordDeathSpot(x, y) {
+	if (!_fbDb_online) return;
+	let key = getDeathSpotsKey();
+	if (!key) return;
+	if (!deathSpots[key]) deathSpots[key] = [];
+	let spot = {x: Math.floor(x), y: Math.floor(y)};
+	deathSpots[key].push(spot);
+	_fb_push(_fb_ref(_fbDb_online, key), spot);
+}
+
+function drawDeathSpots(ctx) {
+	let key = getDeathSpotsKey();
+	if (!key || !deathSpots[key] || !deathSpotsLoaded) return;
+	let spots = deathSpots[key];
+	ctx.save();
+	ctx.strokeStyle = '#ffffff';
+	ctx.lineWidth = 1.5;
+	for (let i = 0; i < spots.length; i++) {
+		let sx = spots[i].x;
+		let sy = spots[i].y;
+		ctx.beginPath();
+		ctx.moveTo(sx - 4, sy);
+		ctx.lineTo(sx + 4, sy);
+		ctx.moveTo(sx, sy - 4);
+		ctx.lineTo(sx, sy + 4);
+		ctx.stroke();
+	}
+	ctx.restore();
+}
+
+function lcCoopCursorColor(uid) {
+	let h = 0;
+	for (let i = 0; i < uid.length; i++) h = (h * 31 + uid.charCodeAt(i)) & 0xffff;
+	let palette = ['#ff4444','#44aaff','#ffcc00','#44ff88','#ff44cc','#ff8844','#88ff44','#44ffee'];
+	return palette[h % palette.length];
+}
+
+function lcCoopStartCursorPush() {
+	if (lcCoopCursorPushTimer) return;
+	lcCoopCursorPushTimer = setInterval(() => {
+		if (!lcCoopId || !_fbDb_online || menuScreen != 5) return;
+		_fb_set(_fb_ref(_fbDb_online, 'levelcoop/' + lcCoopId + '/cursors/' + lcCoopMyId), {
+			x: _xmouse,
+			y: _ymouse,
+			ts: Date.now()
+		});
+	}, 100);
+}
+
+function lcCoopStopCursorPush() {
+	if (lcCoopCursorPushTimer) {
+		clearInterval(lcCoopCursorPushTimer);
+		lcCoopCursorPushTimer = null;
+	}
+	if (lcCoopCursorUnsub && _fbDb_online && lcCoopId) {
+		_fb_off(_fb_ref(_fbDb_online, 'levelcoop/' + lcCoopId + '/cursors'));
+	}
+	lcCoopCursorUnsub = null;
+	lcCoopRemoteCursors = {};
+}
+
+function lcCoopStartCursorListen() {
+	if (!lcCoopId || !_fbDb_online) return;
+	lcCoopCursorUnsub = _fb_onValue(_fb_ref(_fbDb_online, 'levelcoop/' + lcCoopId + '/cursors'), snap => {
+		let val = snap.val();
+		lcCoopRemoteCursors = {};
+		if (!val) return;
+		let now = Date.now();
+		for (let uid of Object.keys(val)) {
+			if (uid === lcCoopMyId) continue;
+			if (now - val[uid].ts < 3000) {
+				lcCoopRemoteCursors[uid] = val[uid];
+			}
+		}
+	});
+}
+
+function drawLCCoopCursors() {
+	if (!lcCoopShowCursors || !lcCoopId) return;
+	let uids = Object.keys(lcCoopRemoteCursors);
+	if (!uids.length) return;
+	let now = Date.now();
+	ctx.save();
+	ctx.font = '13px Helvetica';
+	ctx.textBaseline = 'top';
+	for (let i = 0; i < uids.length; i++) {
+		let uid = uids[i];
+		let c = lcCoopRemoteCursors[uid];
+		if (!c || now - c.ts >= 3000) continue;
+		let col = lcCoopCursorColor(uid);
+		ctx.strokeStyle = col;
+		ctx.fillStyle = col;
+		ctx.lineWidth = 1.5;
+		ctx.beginPath();
+		ctx.moveTo(c.x, c.y);
+		ctx.lineTo(c.x + 10, c.y + 5);
+		ctx.lineTo(c.x + 5, c.y + 10);
+		ctx.lineTo(c.x, c.y);
+		ctx.fill();
+		ctx.fillText(uid, c.x + 13, c.y + 3);
+	}
+	ctx.restore();
 }
 
 function shareToExplore() {
@@ -8085,6 +8233,7 @@ function draw() {
 			// );
 			ctx.drawImage(osc4, -Math.floor(-cameraX + shakeX) + Math.floor( (-cameraX+shakeX)/3), -Math.floor(-cameraY + shakeY) + Math.floor( Math.max( -cameraY/3 - ((bgXScale>bgYScale)?Math.max(0,(bgXScale*5.4-540)/2):0), 540 - osc4.height / pixelRatio) + shakeY/3), osc4.width / pixelRatio, osc4.height / pixelRatio);
 			drawLevel(ctx);
+			drawDeathSpots(ctx);
 
 			if (wipeTimer == 30) {
 				if (transitionType == 0) {
@@ -9639,6 +9788,22 @@ function draw() {
 						ctx.textAlign = 'left';
 						ctx.fillText('Coop ID: ' + lcCoopId, 675, tabWindowY + 292);
 						ctx.font = '23px Helvetica';
+
+						let cbx = 675;
+						let cby = tabWindowY + 308;
+						ctx.fillStyle = '#404040';
+						ctx.fillRect(cbx, cby, 14, 14);
+						if (lcCoopShowCursors) {
+							ctx.fillStyle = '#ffffff';
+							ctx.fillRect(cbx + 3, cby + 3, 8, 8);
+						}
+						ctx.font = '14px Helvetica';
+						ctx.fillStyle = '#ffffff';
+						ctx.fillText('Show cursors', cbx + 20, cby + 2);
+						ctx.font = '23px Helvetica';
+						if (mouseIsDown && !pmouseIsDown && onRect(_xmouse, _ymouse, cbx, cby, 130, 16)) {
+							lcCoopShowCursors = !lcCoopShowCursors;
+						}
 					}
 					drawMenu0Button('EXIT', 846, cheight - 50, false, menuExitLevelCreator, 100);
 					// drawMenu2_3Button(0, 837.5, 486.95, menuExitLevelCreator);
@@ -9833,6 +9998,7 @@ function draw() {
 				}
 			}
 			ctx.drawImage(osc5, 0, 0, 660, 480);
+			drawLCCoopCursors();
 			osctx5.restore();
 			// else if (tool == 6 || tool == 7) {
 			// 	levelCreator.rectSelect.clear();
@@ -12048,25 +12214,19 @@ function onlineBeginGame() {
 
 	playMode = 4;
 	playingLevelpack = true;
-
-	console.log('onlineservices levels data:', onlineLevelsData);
+	loadDeathSpots();
 	if (!onlineLevelsData || !onlineLevelsData.length) {
-		console.error('onlineservices No level data . redo..');
 		onlineInGame = false;
 		menuScreen = 12;
 		return;
 	}
-	console.log('onlineservices level 0 data:\n', onlineLevelsData[0].data.slice(0, 300));
 
 	loadLevelpack(onlineLevelsData);
-
-	console.log('onlineservices after loadLevelpack: levels[0]=', levels[0], 'startLocations[0]=', startLocations ? startLocations[0] : 'undef');
 
 	currentLevel = onlineSelectedLevel;
 	transitionType = 1;
 
 	if (!levels || !levels[currentLevel] || !levels[currentLevel][0]) {
-		console.error('onlineservices levels[' + currentLevel + '] not populated after loadLevelpack . redo..');
 		onlineInGame = false;
 		playMode = 1;
 		playingLevelpack = false;
