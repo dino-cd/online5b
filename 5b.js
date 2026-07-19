@@ -12152,18 +12152,17 @@ function onlineGenId() {
 }
 
 async function onlineStartMatchmaking(levelIndex) {
-	if (!_fbDb_online) { alert('Firebase not ready yet, try again in a moment.'); return; }
+	if (!_fbDb_online) { alert('Firebase not ready.'); return; }
 
 	onlineDisconnect();
 
 	if (!onlineLevelsData) await onlineLoadLevels();
-	if (!onlineLevelsData) return;
+	if (!onlineLevelsData || !onlineLevelsData[levelIndex]) return;
 
 	onlineSelectedLevel = levelIndex;
 
 	if (levelIndex === 1) {
 		onlinePlaza = true;
-		onlineMatchmaking = false;
 		onlineBeginGame();
 		return;
 	}
@@ -12172,37 +12171,57 @@ async function onlineStartMatchmaking(levelIndex) {
 	menuScreen = 13;
 
 	const keyword = onlineKeyword.trim();
-	const queuePath = keyword ? ('online/queue_kw/' + keyword.replace(/[.#$\[\]]/g, '_') + '_' + levelIndex) : 'online/queue_' + levelIndex;
+	const queuePath = keyword
+		? 'online/queue_kw/' + keyword.replace(/[.#$\[\]]/g, '_') + '_' + levelIndex
+		: 'online/queue_' + levelIndex;
 	_onlineQueuePath = queuePath;
 	const slotCount = levelIndex === 0 ? 2 : 3;
 	onlineSlotCount = slotCount;
 
 	const snap = await _fb_get(_fb_ref(_fbDb_online, queuePath));
 	const existing = snap.val();
-	const stale = !existing || !existing.ts || (Date.now() - existing.ts > _onlineStaleMs) || existing.level !== levelIndex;
-	const sessionFull = existing && !stale && (existing.slots || 0) >= slotCount;
+	const now = Date.now();
+	const stale = !existing
+		|| !existing.ts
+		|| (now - existing.ts > _onlineStaleMs)
+		|| existing.level !== levelIndex;
+	const full = !stale && existing && (existing.slots || 0) >= slotCount;
 
-	if (existing && !stale && !sessionFull) {
+	if (!stale && !full && existing) {
 		const mySlot = existing.slots || 1;
+		const newSlots = mySlot + 1;
 		onlineSessionId = existing.sessionId;
 		onlineMySlot = mySlot;
-		onlineOtherSlot = mySlot === 1 ? 0 : 1;
+		onlineOtherSlot = 0;
 		onlineOtherName = existing.name || 'Player';
-		const newSlots = mySlot + 1;
 		if (newSlots >= slotCount) {
 			await _fb_remove(_fb_ref(_fbDb_online, queuePath));
+			_onlineQueuePath = null;
 		} else {
-			await _fb_update(_fb_ref(_fbDb_online, queuePath), { slots: newSlots, ts: Date.now() });
+			await _fb_update(_fb_ref(_fbDb_online, queuePath), { slots: newSlots, ts: now });
 		}
 		await _fb_set(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/player' + mySlot), {
 			name: onlinePlayerName || 'Player', ready: true
 		});
 		if (newSlots >= slotCount) {
 			await _fb_update(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId), { started: true });
+			onlineBeginGame();
+		} else {
+			const sessRef = _fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId);
+			onlineUnsubMatch = _fb_onValue(sessRef, snap2 => {
+				const val2 = snap2.val();
+				if (!val2) return;
+				const filled = ['player0','player1','player2'].filter(k => val2[k]).length;
+				if (filled >= slotCount || val2.started) {
+					_fb_off(sessRef);
+					onlineUnsubMatch = null;
+					_onlineStopHeartbeat();
+					onlineBeginGame();
+				}
+			});
 		}
-		onlineBeginGame();
 	} else {
-		if (existing && (stale || sessionFull)) {
+		if (existing) {
 			try { await _fb_remove(_fb_ref(_fbDb_online, queuePath)); } catch(e) {}
 			if (existing.sessionId) {
 				try { await _fb_remove(_fb_ref(_fbDb_online, 'online/sessions/' + existing.sessionId)); } catch(e) {}
@@ -12212,28 +12231,29 @@ async function onlineStartMatchmaking(levelIndex) {
 		onlineSessionId = sessionId;
 		onlineMySlot = 0;
 		onlineOtherSlot = 1;
+		await _fb_set(_fb_ref(_fbDb_online, 'online/sessions/' + sessionId + '/player0'), {
+			name: onlinePlayerName || 'Player', ready: true
+		});
+		await _fb_update(_fb_ref(_fbDb_online, 'online/sessions/' + sessionId), { ts: now });
 		await _fb_set(_fb_ref(_fbDb_online, queuePath), {
 			sessionId,
 			level: levelIndex,
 			name: onlinePlayerName || 'Player',
 			slots: 1,
-			ts: Date.now()
+			ts: now
 		});
-		await _fb_set(_fb_ref(_fbDb_online, 'online/sessions/' + sessionId + '/player0'), {
-			name: onlinePlayerName || 'Player', ready: true
-		});
-		await _fb_update(_fb_ref(_fbDb_online, 'online/sessions/' + sessionId), { ts: Date.now() });
 		_onlineStartHeartbeat(queuePath);
 		const sessRef = _fb_ref(_fbDb_online, 'online/sessions/' + sessionId);
 		onlineUnsubMatch = _fb_onValue(sessRef, snap2 => {
-			const val = snap2.val();
-			if (!val) return;
-			const filled = ['player0','player1','player2'].filter(k => val[k]).length;
-			if (filled >= slotCount || val.started) {
+			if (!onlineMatchmaking || onlineSessionId !== sessionId) return;
+			const val2 = snap2.val();
+			if (!val2) return;
+			const filled = ['player0','player1','player2'].filter(k => val2[k]).length;
+			if (filled >= slotCount || val2.started) {
 				_fb_off(sessRef);
 				onlineUnsubMatch = null;
 				_onlineStopHeartbeat();
-				if (val.player1) onlineOtherName = val.player1.name || 'Player';
+				if (val2.player1) onlineOtherName = val2.player1.name || 'Player';
 				onlineBeginGame();
 			}
 		});
@@ -12243,18 +12263,17 @@ async function onlineStartMatchmaking(levelIndex) {
 function onlineBeginGame() {
 	onlineMatchmaking = false;
 	onlineInGame = true;
-
 	playMode = 4;
 	playingLevelpack = true;
 	loadDeathSpots();
-	if (!onlineLevelsData || !onlineLevelsData.length) {
+
+	if (!onlineLevelsData || !onlineLevelsData[onlineSelectedLevel]) {
 		onlineInGame = false;
 		menuScreen = 12;
 		return;
 	}
 
 	loadLevelpack(onlineLevelsData);
-
 	currentLevel = onlineSelectedLevel;
 	transitionType = 1;
 
@@ -12279,12 +12298,8 @@ function onlineBeginGame() {
 		const spawnX = Math.floor(lw / 2);
 		const spawnY = lh - 2;
 
-		startLocations[currentLevel] = [
-			[0, spawnX, 0, spawnY, 0, 9]
-		];
-		if (!myLevelChars[1]) myLevelChars[1] = [];
+		startLocations[currentLevel] = [[0, spawnX, 0, spawnY, 0, 9]];
 		myLevelChars[1] = [{id:0, x:spawnX, y:spawnY, state:10}];
-
 		resetLevel();
 
 		charCount = 1;
@@ -12292,25 +12307,30 @@ function onlineBeginGame() {
 		control = 0;
 		onlineMyCharIndex = 0;
 		onlineOtherCharIndex = -1;
-
 		cameraX = Math.min(Math.max(char[0].x - 480, 0), levelWidth * 30 - 960);
 		cameraY = Math.min(Math.max(char[0].y - 270, 0), levelHeight * 30 - 540);
 
+		const myUid = onlinePlazaUid;
 		const plazaRef = _fb_ref(_fbDb_online, 'online/plaza');
 		onlinePlazaUnsub = _fb_onValue(plazaRef, snap => {
+			if (!onlinePlaza || onlinePlazaUid !== myUid) return;
 			const val = snap.val();
 			onlinePlazaPlayers = {};
 			if (!val) return;
-			const now = Date.now();
+			const t = Date.now();
 			for (const uid of Object.keys(val)) {
-				if (uid === onlinePlazaUid) continue;
+				if (uid === myUid) continue;
 				const p = val[uid];
-				if (p && p.ts && now - p.ts < 10000) onlinePlazaPlayers[uid] = p;
+				if (p && p.ts && t - p.ts < 10000) onlinePlazaPlayers[uid] = p;
 			}
 		});
 
+		const myPushUid = onlinePlazaUid;
 		const plazaPushInterval = setInterval(() => {
-			if (!onlineInGame || !onlinePlaza || !_fbDb_online) { clearInterval(plazaPushInterval); return; }
+			if (!onlineInGame || !onlinePlaza || !_fbDb_online || onlinePlazaUid !== myPushUid) {
+				clearInterval(plazaPushInterval);
+				return;
+			}
 			const me = char[0];
 			if (!me) return;
 			const moved = onlineMyLastMoveX !== me.x || onlineMyLastMoveY !== me.y;
@@ -12319,7 +12339,7 @@ function onlineBeginGame() {
 				onlineMyLastMoveY = me.y;
 				onlineMyLastMoveTs = Date.now();
 			}
-			_fb_set(_fb_ref(_fbDb_online, 'online/plaza/' + onlinePlazaUid), {
+			_fb_set(_fb_ref(_fbDb_online, 'online/plaza/' + myPushUid), {
 				x: Math.round(me.x * 10) / 10,
 				y: Math.round(me.y * 10) / 10,
 				vx: Math.round(me.vx * 100) / 100,
@@ -12356,18 +12376,22 @@ function onlineBeginGame() {
 	cameraX = Math.min(Math.max(char[control].x - 480, 0), levelWidth * 30 - 960);
 	cameraY = Math.min(Math.max(char[control].y - 270, 0), levelHeight * 30 - 540);
 	currentLevelDisplayName = onlineLevelsData[onlineSelectedLevel].name + ' (Online)';
-
-	onlineOtherX = char[onlineOtherCharIndex].x;
-	onlineOtherY = char[onlineOtherCharIndex].y;
+	onlineOtherX = char[onlineOtherCharIndex] ? char[onlineOtherCharIndex].x : 0;
+	onlineOtherY = char[onlineOtherCharIndex] ? char[onlineOtherCharIndex].y : 0;
 	onlineRemotePlayers = {};
 	onlineDiaReady = false;
+	onlineDiaReadyCount = 0;
+	onlineDiaAutoTimer = 0;
 
-	const stateRef = _fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/state');
+	const capturedSessionId = onlineSessionId;
+	const capturedSlotCount = onlineSlotCount;
+	const stateRef = _fb_ref(_fbDb_online, 'online/sessions/' + capturedSessionId + '/state');
 	onlineUnsubState = _fb_onValue(stateRef, snap => {
+		if (!onlineInGame || onlineSessionId !== capturedSessionId) return;
 		const val = snap.val();
 		if (!val) return;
 
-		for (let s = 0; s < onlineSlotCount; s++) {
+		for (let s = 0; s < capturedSlotCount; s++) {
 			if (s === onlineMySlot) continue;
 			const other = val['p' + s];
 			if (!other) continue;
@@ -12406,14 +12430,12 @@ function onlineBeginGame() {
 		if (diaVal && cutScene === 1) {
 			const readyCount = Object.keys(diaVal).filter(k => diaVal[k] === true).length;
 			onlineDiaReadyCount = readyCount;
-			if (readyCount >= onlineSlotCount && !onlineDiaReady) {
+			if (readyCount >= capturedSlotCount && !onlineDiaReady) {
 				onlineDiaReady = true;
-				_fb_remove(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/state/dia'));
-				onlineDiaAutoTimer = 0;
+				_fb_remove(_fb_ref(_fbDb_online, 'online/sessions/' + capturedSessionId + '/state/dia'));
 				cutSceneLine++;
 				if (cutSceneLine >= cLevelDialogueChar.length) endCutScene();
 				else displayLine(currentLevel, cutSceneLine);
-				onlineDiaReady = false;
 			}
 		} else if (!diaVal) {
 			onlineDiaReadyCount = 0;
@@ -12472,7 +12494,7 @@ function onlineSendState() {
 function onlineApplyOtherState() {
 	if (!onlineInGame) return;
 	const me = char[onlineMyCharIndex];
-	const c  = char[onlineOtherCharIndex];
+	const c = char[onlineOtherCharIndex];
 	if (!c || !me || onlineOtherX === null) return;
 
 	const iAmCarryingThem = me.carry && me.carryObject === onlineOtherCharIndex;
@@ -12485,29 +12507,27 @@ function onlineApplyOtherState() {
 		return;
 	}
 
-	c.dire      = onlineOtherDire;
-	c.frame     = onlineOtherFrame;
+	c.dire = onlineOtherDire;
+	c.frame = onlineOtherFrame;
 	c.leg1frame = onlineOtherLeg1;
 	c.leg2frame = onlineOtherLeg2;
 	c.justChanged = 2;
 
 	if (onlineOtherCarrying && onlineOtherCarriedX !== null) {
-		me.x   = onlineOtherCarriedX;
-		me.y   = onlineOtherCarriedY;
+		me.x = onlineOtherCarriedX;
+		me.y = onlineOtherCarriedY;
 		me.vx = 0;
 		me.vy = 0;
 		me.onob = false;
-
 		if (c.carriedBy !== onlineMyCharIndex) {
 			c.carry = true;
-			c.carryObject  = onlineOtherCharIndex;
-			me.carriedBy   = onlineOtherCharIndex;
+			c.carryObject = onlineOtherCharIndex;
+			me.carriedBy = onlineOtherCharIndex;
 		}
-
-		c.x   = onlineOtherX;
-		c.y   = onlineOtherY;
-		c.vx  = onlineOtherVx;
-		c.vy  = onlineOtherVy;
+		c.x = onlineOtherX;
+		c.y = onlineOtherY;
+		c.vx = onlineOtherVx;
+		c.vy = onlineOtherVy;
 		c.onob = onlineOtherOnob;
 	} else {
 		if (me.carriedBy === onlineOtherCharIndex) {
@@ -12547,6 +12567,30 @@ function onlineDisconnect() {
 		onlinePlazaPlayers = {};
 	}
 
+	if (onlineUnsubMatch) {
+		if (_onlineQueuePath && _fbDb_online) {
+			try { _fb_off(_fb_ref(_fbDb_online, _onlineQueuePath)); } catch(e) {}
+			try { _fb_remove(_fb_ref(_fbDb_online, _onlineQueuePath)); } catch(e) {}
+		}
+		onlineUnsubMatch = null;
+	}
+	_onlineQueuePath = null;
+	_onlineStopHeartbeat();
+
+	if (onlineUnsubState && _fbDb_online && onlineSessionId) {
+		try { _fb_off(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/state')); } catch(e) {}
+		onlineUnsubState = null;
+	}
+
+	const sidToRemove = onlineSessionId;
+	onlineSessionId = null;
+	if (sidToRemove && _fbDb_online) {
+		try { _fb_remove(_fb_ref(_fbDb_online, 'online/sessions/' + sidToRemove)); } catch(e) {}
+	}
+
+	onlineInGame = false;
+	onlineMatchmaking = false;
+	onlineOtherX = null;
 	onlineWantEscape = false;
 	onlineOtherWantsEscape = false;
 	onlineOtherCarrying = false;
@@ -12561,36 +12605,9 @@ function onlineDisconnect() {
 	onlineOtherChatLastTs = 0;
 	onlineRemotePlayers = {};
 	onlineDiaReady = false;
-	if (onlineUnsubMatch && _fbDb_online) {
-		if (_onlineQueuePath) {
-			try { _fb_off(_fb_ref(_fbDb_online, _onlineQueuePath)); } catch(e){}
-			try { _fb_remove(_fb_ref(_fbDb_online, _onlineQueuePath)); } catch(e){}
-		}
-		onlineUnsubMatch = null;
-	}
-	_onlineQueuePath = null;
-	_onlineStopHeartbeat();
-	if (onlineUnsubState && _fbDb_online && onlineSessionId) {
-		try { _fb_off(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/state')); } catch(e){}
-		onlineUnsubState = null;
-	}
-	if (onlineSessionId && _fbDb_online) {
-		const url = 'https://dino-cd.github.io/online5b/';
-		try {
-			_fb_remove(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId));
-		} catch(e){}
-		onlineSessionId = null;
-	}
-	onlineInGame = false;
-	onlineMatchmaking = false;
-	onlineOtherX = null;
+	onlineDiaReadyCount = 0;
+	onlineDiaAutoTimer = 0;
 }
-
-window.addEventListener('beforeunload', () => { if (onlineInGame) onlineDisconnect(); });
-window.addEventListener('pagehide',     () => { if (onlineInGame) onlineDisconnect(); });
-document.addEventListener('visibilitychange', () => {
-	if (document.visibilityState === 'hidden' && onlineInGame) onlineDisconnect();
-});
 
 function onlineExitGame() {
 	onlineDisconnect();
@@ -12722,7 +12739,7 @@ function _drawOnlineMenuImpl() {
 	ctx.fillText('Private code', 28, 172);
 	ctx.font = '18px Helvetica';
 	ctx.fillStyle = '#aaaaaa';
-	ctx.fillText('19 July 2026 18.46 SECOND', 28, 196);
+	ctx.fillText('19 July 2026 19.02 THIRD', 28, 196);
 	_onlineKwBoxObj.x = 28;
 	_onlineKwBoxObj.y = 216;
 	_onlineKwBoxObj.draw();
