@@ -12144,7 +12144,6 @@ async function onlineLoadLevels() {
 		}
 		onlineLevelsData = lvls.length ? lvls : null;
 	} catch(e) {
-		console.error('Failed to load 2pLevels.txt', e);
 	}
 }
 
@@ -12156,6 +12155,9 @@ async function onlineStartMatchmaking(levelIndex) {
 	if (!_fbDb_online) { alert('Firebase not ready yet, try again in a moment.'); return; }
 
 	onlineDisconnect();
+
+	if (!onlineLevelsData) await onlineLoadLevels();
+	if (!onlineLevelsData) return;
 
 	onlineSelectedLevel = levelIndex;
 
@@ -12720,7 +12722,7 @@ function _drawOnlineMenuImpl() {
 	ctx.fillText('Private code', 28, 172);
 	ctx.font = '18px Helvetica';
 	ctx.fillStyle = '#aaaaaa';
-	ctx.fillText('19 July 20206 16.23', 28, 196);
+	ctx.fillText('19 July 2026 18.46 SECOND', 28, 196);
 	_onlineKwBoxObj.x = 28;
 	_onlineKwBoxObj.y = 216;
 	_onlineKwBoxObj.draw();
