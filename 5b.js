@@ -8450,7 +8450,8 @@ function draw() {
 			}
 
 			if (onlineInGame) {
-				const beingCarried = char[onlineOtherCharIndex] &&
+				const beingCarried = onlineOtherCharIndex >= 0 &&
+				                     char[onlineOtherCharIndex] &&
 				                     char[onlineOtherCharIndex].carry &&
 				                     char[onlineOtherCharIndex].carryObject === onlineMyCharIndex;
 				if (beingCarried) {
@@ -12090,7 +12091,15 @@ const cbdOnline = 180;
 let _onlineNameBoxObj = null;
 let _onlineKwBoxObj = null;
 
-let onlinePlaza = false;
+let _vanillaLevels = null;
+let _vanillaStartLocations = null;
+let _vanillaBgs = null;
+let _vanillaDialogueChar = null;
+let _vanillaDialogueText = null;
+let _vanillaDialogueFace = null;
+let _vanillaLevelName = null;
+let _vanillaMdao = null;
+let _vanillaLevelCount = null;
 let onlinePlazaUid = null;
 let onlinePlazaPlayers = {};
 let onlinePlazaUnsub = null;
@@ -12273,6 +12282,18 @@ function onlineBeginGame() {
 		return;
 	}
 
+	if (!_vanillaLevels) {
+		_vanillaLevels = levels;
+		_vanillaStartLocations = startLocations;
+		_vanillaBgs = bgs;
+		_vanillaDialogueChar = dialogueChar;
+		_vanillaDialogueText = dialogueText;
+		_vanillaDialogueFace = dialogueFace;
+		_vanillaLevelName = levelName;
+		_vanillaMdao = mdao;
+		_vanillaLevelCount = levelCount;
+	}
+
 	loadLevelpack(onlineLevelsData);
 	currentLevel = onlineSelectedLevel;
 	transitionType = 1;
@@ -12299,7 +12320,7 @@ function onlineBeginGame() {
 		const spawnY = lh - 2;
 
 		startLocations[currentLevel] = [[0, spawnX, 0, spawnY, 0, 9]];
-		myLevelChars[1] = [{id:0, x:spawnX, y:spawnY, state:10}];
+
 		resetLevel();
 
 		charCount = 1;
@@ -12449,7 +12470,7 @@ function onlineBeginGame() {
 function onlineSendState() {
 	if (!onlineInGame || !onlineSessionId || !_fbDb_online || onlinePlaza) return;
 	const me = char[onlineMyCharIndex];
-	const other = char[onlineOtherCharIndex];
+	const other = onlineOtherCharIndex >= 0 ? char[onlineOtherCharIndex] : null;
 	if (!me) return;
 
 	const iAmCarrying = me.carry && me.carryObject === onlineOtherCharIndex;
@@ -12492,7 +12513,7 @@ function onlineSendState() {
 }
 
 function onlineApplyOtherState() {
-	if (!onlineInGame) return;
+	if (!onlineInGame || onlineOtherCharIndex < 0) return;
 	const me = char[onlineMyCharIndex];
 	const c = char[onlineOtherCharIndex];
 	if (!c || !me || onlineOtherX === null) return;
@@ -12607,6 +12628,27 @@ function onlineDisconnect() {
 	onlineDiaReady = false;
 	onlineDiaReadyCount = 0;
 	onlineDiaAutoTimer = 0;
+
+	if (_vanillaLevels) {
+		levels = _vanillaLevels;
+		startLocations = _vanillaStartLocations;
+		bgs = _vanillaBgs;
+		dialogueChar = _vanillaDialogueChar;
+		dialogueText = _vanillaDialogueText;
+		dialogueFace = _vanillaDialogueFace;
+		levelName = _vanillaLevelName;
+		mdao = _vanillaMdao;
+		levelCount = _vanillaLevelCount;
+		_vanillaLevels = null;
+		_vanillaStartLocations = null;
+		_vanillaBgs = null;
+		_vanillaDialogueChar = null;
+		_vanillaDialogueText = null;
+		_vanillaDialogueFace = null;
+		_vanillaLevelName = null;
+		_vanillaMdao = null;
+		_vanillaLevelCount = null;
+	}
 }
 
 function onlineExitGame() {
@@ -12739,7 +12781,7 @@ function _drawOnlineMenuImpl() {
 	ctx.fillText('Private code', 28, 172);
 	ctx.font = '18px Helvetica';
 	ctx.fillStyle = '#aaaaaa';
-	ctx.fillText('19 July 2026 19.02 THIRD', 28, 196);
+	ctx.fillText('19 July 2026 19.12 FOURTH ', 28, 196);
 	_onlineKwBoxObj.x = 28;
 	_onlineKwBoxObj.y = 216;
 	_onlineKwBoxObj.draw();
