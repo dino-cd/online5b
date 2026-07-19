@@ -4721,6 +4721,9 @@ function rescue() {
 }
 
 function displayLine(level, line) {
+	onlineDiaReadyCount = 0;
+	onlineDiaAutoTimer = 0;
+	onlineDiaReady = false;
 	let p = cLevelDialogueChar[line];
 	if (p >= 50 && p < 60) {
 		leverSwitch(p - 50);
@@ -11182,6 +11185,18 @@ function draw() {
 	} else if (pmenuScreen == 3) {
 		if (cutScene == 1 || cutScene == 2) {
 			drawCutScene();
+			if (onlineInGame && !onlinePlaza && cutScene == 1) {
+				onlineDiaAutoTimer++;
+				if (onlineDiaAutoTimer >= 600) {
+					onlineDiaAutoTimer = 0;
+					_fb_set(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/state/dia/p' + onlineMySlot), true);
+				}
+				ctx.font = '16px Helvetica';
+				ctx.fillStyle = '#ffffff';
+				ctx.textAlign = 'left';
+				ctx.textBaseline = 'top';
+				ctx.fillText(onlineDiaReadyCount + '/' + onlineSlotCount, 14, cheight - 34);
+			}
 		}
 		drawLevelButtons();
 		if (onlineInGame && menuScreen == 3) {
@@ -12089,6 +12104,9 @@ let onlineRemotePlayers = {};
 
 let onlineDiaReady = false;
 let onlineDiaReadyUnsub = null;
+let onlineDiaReadyCount = 0;
+let onlineDiaAutoTimer = 0;
+let _onlineQueuePath = null;
 
 async function onlineLoadLevels() {
 	if (onlineLevelsData) return;
@@ -12136,6 +12154,9 @@ function onlineGenId() {
 
 async function onlineStartMatchmaking(levelIndex) {
 	if (!_fbDb_online) { alert('Firebase not ready yet, try again in a moment.'); return; }
+
+	onlineDisconnect();
+
 	onlineSelectedLevel = levelIndex;
 
 	if (levelIndex === 1) {
@@ -12150,6 +12171,7 @@ async function onlineStartMatchmaking(levelIndex) {
 
 	const keyword = onlineKeyword.trim();
 	const queuePath = keyword ? ('online/queue_kw/' + keyword.replace(/[.#$\[\]]/g, '_') + '_' + levelIndex) : 'online/queue_' + levelIndex;
+	_onlineQueuePath = queuePath;
 	const slotCount = levelIndex === 0 ? 2 : 3;
 	onlineSlotCount = slotCount;
 
@@ -12252,21 +12274,25 @@ function onlineBeginGame() {
 
 		const lw = levels[currentLevel][0].length;
 		const lh = levels[currentLevel].length;
+		const spawnX = Math.floor(lw / 2);
+		const spawnY = lh - 2;
 
-		char = [new Character(
-			0,
-			Math.floor(lw / 2) * 30,
-			(lh - 2) * 30,
-			70, 400, 10,
-			charD[0][0], charD[0][1], charD[0][2], charD[0][2],
-			charD[0][3], charD[0][4], charD[0][6], charD[0][8],
-			charModels[0].defaultExpr
-		)];
+		startLocations[currentLevel] = [
+			[0, spawnX, 0, spawnY, 0, 9]
+		];
+		if (!myLevelChars[1]) myLevelChars[1] = [];
+		myLevelChars[1] = [{id:0, x:spawnX, y:spawnY, state:10}];
+
+		resetLevel();
+
 		charCount = 1;
 		charCount2 = 1;
 		control = 0;
 		onlineMyCharIndex = 0;
 		onlineOtherCharIndex = -1;
+
+		cameraX = Math.min(Math.max(char[0].x - 480, 0), levelWidth * 30 - 960);
+		cameraY = Math.min(Math.max(char[0].y - 270, 0), levelHeight * 30 - 540);
 
 		const plazaRef = _fb_ref(_fbDb_online, 'online/plaza');
 		onlinePlazaUnsub = _fb_onValue(plazaRef, snap => {
@@ -12316,9 +12342,10 @@ function onlineBeginGame() {
 		if (startLocations[currentLevel][i][5] >= 9) playableIndices.push(i);
 	}
 	while (playableIndices.length < onlineSlotCount) {
-		playableIndices.push(playableIndices.length % startLocations[currentLevel].length);
+		playableIndices.push(playableIndices.length % Math.max(1, startLocations[currentLevel].length));
 	}
 	onlineMyCharIndex = playableIndices[onlineMySlot % playableIndices.length];
+	onlineOtherSlot = onlineMySlot === 0 ? 1 : 0;
 	onlineOtherCharIndex = playableIndices[onlineOtherSlot % playableIndices.length];
 
 	resetLevel();
@@ -12374,16 +12401,20 @@ function onlineBeginGame() {
 		}
 
 		const diaVal = val['dia'];
-		if (diaVal && cutScene === 1 && !onlineDiaReady) {
+		if (diaVal && cutScene === 1) {
 			const readyCount = Object.keys(diaVal).filter(k => diaVal[k] === true).length;
-			if (readyCount >= onlineSlotCount) {
+			onlineDiaReadyCount = readyCount;
+			if (readyCount >= onlineSlotCount && !onlineDiaReady) {
 				onlineDiaReady = true;
 				_fb_remove(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/state/dia'));
+				onlineDiaAutoTimer = 0;
 				cutSceneLine++;
 				if (cutSceneLine >= cLevelDialogueChar.length) endCutScene();
 				else displayLine(currentLevel, cutSceneLine);
 				onlineDiaReady = false;
 			}
+		} else if (!diaVal) {
+			onlineDiaReadyCount = 0;
 		}
 	});
 
@@ -12410,18 +12441,18 @@ function onlineSendState() {
 	_onlinePrevCarrying = iAmCarrying;
 
 	const update = {
-		x:        Math.round(me.x * 10) / 10,
-		y:        Math.round(me.y * 10) / 10,
-		vx:       Math.round(me.vx * 100) / 100,
-		vy:       Math.round(me.vy * 100) / 100,
-		dire:     me.dire,
-		frame:    me.frame,
-		leg1:     me.leg1frame,
-		leg2:     me.leg2frame,
-		onob:     me.onob,
+		x: Math.round(me.x * 10) / 10,
+		y: Math.round(me.y * 10) / 10,
+		vx: Math.round(me.vx * 100) / 100,
+		vy: Math.round(me.vy * 100) / 100,
+		dire: me.dire,
+		frame: me.frame,
+		leg1: me.leg1frame,
+		leg2: me.leg2frame,
+		onob: me.onob,
 		carrying: iAmCarrying,
-		escape:   false,
-		threw:    justThrew
+		escape: false,
+		threw: justThrew
 	};
 
 	if (iAmCarrying && other) {
@@ -12461,12 +12492,12 @@ function onlineApplyOtherState() {
 	if (onlineOtherCarrying && onlineOtherCarriedX !== null) {
 		me.x   = onlineOtherCarriedX;
 		me.y   = onlineOtherCarriedY;
-		me.vx  = 0;
-		me.vy  = 0;
+		me.vx = 0;
+		me.vy = 0;
 		me.onob = false;
 
 		if (c.carriedBy !== onlineMyCharIndex) {
-			c.carry        = true;
+			c.carry = true;
 			c.carryObject  = onlineOtherCharIndex;
 			me.carriedBy   = onlineOtherCharIndex;
 		}
@@ -12479,18 +12510,18 @@ function onlineApplyOtherState() {
 	} else {
 		if (me.carriedBy === onlineOtherCharIndex) {
 			me.carriedBy = -1;
-			c.carry      = false;
+			c.carry = false;
 			if (onlineOtherThrew) {
-				me.vx  = onlineOtherThrewVx;
-				me.vy  = onlineOtherThrewVy;
+				me.vx = onlineOtherThrewVx;
+				me.vy = onlineOtherThrewVy;
 				me.onob = false;
 				onlineOtherThrew = false;
 			}
 		}
-		c.x    = onlineOtherX;
-		c.y    = onlineOtherY;
-		c.vx   = onlineOtherVx;
-		c.vy   = onlineOtherVy;
+		c.x = onlineOtherX;
+		c.y = onlineOtherY;
+		c.vx = onlineOtherVx;
+		c.vy = onlineOtherVy;
 		c.onob = onlineOtherOnob;
 	}
 }
@@ -12529,9 +12560,13 @@ function onlineDisconnect() {
 	onlineRemotePlayers = {};
 	onlineDiaReady = false;
 	if (onlineUnsubMatch && _fbDb_online) {
-		try { _fb_off(_fb_ref(_fbDb_online, 'online/queue_' + onlineSelectedLevel)); } catch(e){}
+		if (_onlineQueuePath) {
+			try { _fb_off(_fb_ref(_fbDb_online, _onlineQueuePath)); } catch(e){}
+			try { _fb_remove(_fb_ref(_fbDb_online, _onlineQueuePath)); } catch(e){}
+		}
 		onlineUnsubMatch = null;
 	}
+	_onlineQueuePath = null;
 	_onlineStopHeartbeat();
 	if (onlineUnsubState && _fbDb_online && onlineSessionId) {
 		try { _fb_off(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/state')); } catch(e){}
@@ -12610,14 +12645,14 @@ function drawOnlineName(charIndex, displayName) {
 	ctx.fillStyle = '#ffffff';
 	ctx.fillText(displayName, tx, ty);
 	const isMe = charIndex === onlineMyCharIndex;
-	const chatMsg   = isMe ? onlineMyChatMsg   : onlineOtherChatMsg;
-	const chatTimer = isMe ? onlineMyChatTimer  : onlineOtherChatTimer;
+	const chatMsg = isMe ? onlineMyChatMsg : onlineOtherChatMsg;
+	const chatTimer = isMe ? onlineMyChatTimer : onlineOtherChatTimer;
 	const typing    = isMe && onlineChatting;
 
 	if (typing || (chatMsg && chatTimer > 0)) {
 		const bubbleText = typing ? (onlineChatInput || '|') : chatMsg;
 		ctx.font = '12px Helvetica';
-		const bw = Math.min(ctx.measureText(bubbleText).width + 16, 200);
+		const bw = Math.min(ctx.measureText(bubbleText).width + 16, 340);
 		const bh = 22;
 		const bx = tx;
 		const by = ty - 15 - 8;
@@ -12685,7 +12720,7 @@ function _drawOnlineMenuImpl() {
 	ctx.fillText('Private code', 28, 172);
 	ctx.font = '18px Helvetica';
 	ctx.fillStyle = '#aaaaaa';
-	ctx.fillText('your friends/groups can now join in 3P levels.', 28, 196);
+	ctx.fillText('19 July 20206 16.23', 28, 196);
 	_onlineKwBoxObj.x = 28;
 	_onlineKwBoxObj.y = 216;
 	_onlineKwBoxObj.draw();
@@ -12707,11 +12742,17 @@ function _drawOnlineMenuImpl() {
 	} else {
 		let bx = 28;
 		let by = 308;
-		let btnH = 44;
-		let btnGap = 14;
+		let btnH = 36;
+		let btnGap = 8;
+		let rowGap = 10;
+		let maxRight = cwidth - 28;
 		for (let i = 0; i < onlineLevelsData.length; i++) {
-			ctx.font = 'bold 20px Helvetica';
-			let btnW = Math.max(ctx.measureText(onlineLevelsData[i].name).width + 40, 160);
+			ctx.font = 'bold 17px Helvetica';
+			let btnW = Math.max(ctx.measureText(onlineLevelsData[i].name).width + 28, 100);
+			if (bx + btnW > maxRight && bx > 28) {
+				bx = 28;
+				by += btnH + rowGap;
+			}
 			let fill = '#444444';
 			if (onRect(_xmouse, _ymouse, bx, by, btnW, btnH)) {
 				onButton = true;
@@ -12725,7 +12766,7 @@ function _drawOnlineMenuImpl() {
 			ctx.fillStyle = '#ffffff';
 			ctx.textAlign = 'left';
 			ctx.textBaseline = 'middle';
-			ctx.fillText(onlineLevelsData[i].name, bx + 14, by + btnH / 2);
+			ctx.fillText(onlineLevelsData[i].name, bx + 12, by + btnH / 2);
 			bx += btnW + btnGap;
 		}
 	}
