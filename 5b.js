@@ -8293,32 +8293,7 @@ function draw() {
 				}
 			} else {
 				if (control < 1000) {
-					// Open chat with /
-					if (onlineInGame && !onlineChatting && _keysDown[191]) {
-						onlineChatting = true;
-						onlineChatInput = '';
-					}
-					if (onlineChatting) {
-						if (_keysDown[13]) {
-							if (!csPress && onlineChatInput.trim().length > 0) {
-								onlineMyChatMsg = onlineChatInput.trim().slice(0, 64);
-								onlineMyChatTimer = cbdOnline;
-								if (_fbDb_online && onlineSessionId) {
-									_fb_set(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/chat/p' + onlineMySlot), {
-										msg: onlineMyChatMsg, ts: Date.now()
-									});
-								}
-							}
-							onlineChatting = false;
-							onlineChatInput = '';
-							csPress = true;
-						} else csPress = false;
-						// Escape to cancel
-						if (_keysDown[27]) {
-							onlineChatting = false;
-							onlineChatInput = '';
-						}
-					} else {
+					if (true) {
 					if (recover) {
 						char[control].justChanged = 2;
 						if (recoverTimer == 0) {
@@ -11205,7 +11180,6 @@ function draw() {
 		if (onlineInGame && menuScreen == 3) {
 			if (_frameCount % 2 === 0) onlineSendState();
 			if (!onlinePlaza) onlineApplyOtherState();
-			tickOnlineChat();
 			ctx.save();
 			ctx.translate(Math.floor(-cameraX + shakeX), Math.floor(-cameraY + shakeY));
 			if (onlinePlaza) {
@@ -11223,26 +11197,15 @@ function draw() {
 				drawOnlineName(onlineMyCharIndex, onlinePlayerName || 'Player');
 				drawOnlineName(onlineOtherCharIndex, onlineOtherName || 'Player');
 				for (const key of Object.keys(onlineRemotePlayers)) {
-					const p = onlineRemotePlayers[key];
-					if (p) drawRemoteChar(ctx, p, p.name || 'Player');
+					const slot = parseInt(key.slice(1), 10);
+					if (slot < 0 || slot >= onlinePlayableIndices.length) continue;
+					const ci = onlinePlayableIndices[slot];
+					const rp = onlineRemotePlayers[key];
+					if (rp) drawOnlineName(ci, rp.name || 'Player');
 				}
 			}
 			ctx.restore();
-			if (onlineChatting) {
-				ctx.save();
-				ctx.fillStyle = 'rgba(0,0,0,0.65)';
-				ctx.fillRect(0, cheight - 36, cwidth, 36);
-				ctx.font = '18px Helvetica';
-				ctx.fillStyle = '#aaaaff';
-				ctx.textAlign = 'left';
-				ctx.textBaseline = 'middle';
-				ctx.fillText('Chat: ' + onlineChatInput + (_frameCount % 40 < 20 ? '|' : ''), 12, cheight - 18);
-				ctx.fillStyle = '#777777';
-				ctx.font = '13px Helvetica';
-				ctx.textAlign = 'right';
-				ctx.fillText('Enter to send  Esc to cancel', cwidth - 12, cheight - 18);
-				ctx.restore();
-			}
+
 		}
 		if (menuScreen != 3) {
 			cameraX = 0;
@@ -12109,6 +12072,7 @@ let onlinePlazaUnsub = null;
 let onlinePlazaLastMoveTs = 0;
 
 let onlineSlotCount = 2;
+let onlinePlayableIndices = [];
 let onlineMyLastMoveX = null;
 let onlineMyLastMoveY = null;
 let onlineMyLastMoveTs = 0;
@@ -12372,6 +12336,7 @@ function onlineBeginGame() {
 				frame: me.frame,
 				leg1: me.leg1frame,
 				leg2: me.leg2frame,
+				cid: me.id,
 				name: onlinePlayerName || 'Player',
 				lastMove: onlineMyLastMoveTs,
 				ts: Date.now()
@@ -12383,18 +12348,21 @@ function onlineBeginGame() {
 		return;
 	}
 
-	const playableIndices = [];
+	onlinePlayableIndices = [];
 	for (let i = 0; i < startLocations[currentLevel].length; i++) {
-		if (startLocations[currentLevel][i][5] >= 9) playableIndices.push(i);
+		if (startLocations[currentLevel][i][5] >= 9) onlinePlayableIndices.push(i);
 	}
-	while (playableIndices.length < onlineSlotCount) {
-		playableIndices.push(playableIndices.length % Math.max(1, startLocations[currentLevel].length));
+	while (onlinePlayableIndices.length < onlineSlotCount) {
+		onlinePlayableIndices.push(onlinePlayableIndices.length % Math.max(1, startLocations[currentLevel].length));
 	}
-	onlineMyCharIndex = playableIndices[onlineMySlot % playableIndices.length];
+	onlineMyCharIndex = onlinePlayableIndices[onlineMySlot % onlinePlayableIndices.length];
 	onlineOtherSlot = onlineMySlot === 0 ? 1 : 0;
-	onlineOtherCharIndex = playableIndices[onlineOtherSlot % playableIndices.length];
+	onlineOtherCharIndex = onlinePlayableIndices[onlineOtherSlot % onlinePlayableIndices.length];
 
 	resetLevel();
+	charCount2 = onlineSlotCount;
+	doorLightFade = new Array(charCount2).fill(0);
+	doorLightFadeDire = new Array(charCount2).fill(0);
 
 	control = onlineMyCharIndex;
 	cameraX = Math.min(Math.max(char[control].x - 480, 0), levelWidth * 30 - 960);
@@ -12441,13 +12409,6 @@ function onlineBeginGame() {
 			} else {
 				onlineRemotePlayers['p' + s] = other;
 			}
-		}
-
-		const chatVal = val['chat'] && val['chat']['p' + onlineOtherSlot];
-		if (chatVal && chatVal.msg && chatVal.ts !== onlineOtherChatLastTs) {
-			onlineOtherChatLastTs = chatVal.ts;
-			onlineOtherChatMsg = chatVal.msg;
-			onlineOtherChatTimer = cbdOnline;
 		}
 
 		const diaVal = val['dia'];
@@ -12528,47 +12489,66 @@ function onlineApplyOtherState() {
 			putDown(onlineMyCharIndex);
 			onlineOtherWantsEscape = false;
 		}
-		return;
+	} else {
+		c.dire = onlineOtherDire;
+		c.frame = onlineOtherFrame;
+		c.leg1frame = onlineOtherLeg1;
+		c.leg2frame = onlineOtherLeg2;
+		c.justChanged = 2;
+
+		if (onlineOtherCarrying && onlineOtherCarriedX !== null) {
+			me.x = onlineOtherCarriedX;
+			me.y = onlineOtherCarriedY;
+			me.vx = 0;
+			me.vy = 0;
+			me.onob = false;
+			if (c.carriedBy !== onlineMyCharIndex) {
+				c.carry = true;
+				c.carryObject = onlineOtherCharIndex;
+				me.carriedBy = onlineOtherCharIndex;
+			}
+			c.x = onlineOtherX;
+			c.y = onlineOtherY;
+			c.vx = onlineOtherVx;
+			c.vy = onlineOtherVy;
+			c.onob = onlineOtherOnob;
+		} else {
+			if (me.carriedBy === onlineOtherCharIndex) {
+				me.carriedBy = -1;
+				c.carry = false;
+				if (onlineOtherThrew) {
+					me.vx = onlineOtherThrewVx;
+					me.vy = onlineOtherThrewVy;
+					me.onob = false;
+					onlineOtherThrew = false;
+				}
+			}
+			c.x = onlineOtherX;
+			c.y = onlineOtherY;
+			c.vx = onlineOtherVx;
+			c.vy = onlineOtherVy;
+			c.onob = onlineOtherOnob;
+		}
 	}
 
-	c.dire = onlineOtherDire;
-	c.frame = onlineOtherFrame;
-	c.leg1frame = onlineOtherLeg1;
-	c.leg2frame = onlineOtherLeg2;
-	c.justChanged = 2;
-
-	if (onlineOtherCarrying && onlineOtherCarriedX !== null) {
-		me.x = onlineOtherCarriedX;
-		me.y = onlineOtherCarriedY;
-		me.vx = 0;
-		me.vy = 0;
-		me.onob = false;
-		if (c.carriedBy !== onlineMyCharIndex) {
-			c.carry = true;
-			c.carryObject = onlineOtherCharIndex;
-			me.carriedBy = onlineOtherCharIndex;
-		}
-		c.x = onlineOtherX;
-		c.y = onlineOtherY;
-		c.vx = onlineOtherVx;
-		c.vy = onlineOtherVy;
-		c.onob = onlineOtherOnob;
-	} else {
-		if (me.carriedBy === onlineOtherCharIndex) {
-			me.carriedBy = -1;
-			c.carry = false;
-			if (onlineOtherThrew) {
-				me.vx = onlineOtherThrewVx;
-				me.vy = onlineOtherThrewVy;
-				me.onob = false;
-				onlineOtherThrew = false;
-			}
-		}
-		c.x = onlineOtherX;
-		c.y = onlineOtherY;
-		c.vx = onlineOtherVx;
-		c.vy = onlineOtherVy;
-		c.onob = onlineOtherOnob;
+	for (const key of Object.keys(onlineRemotePlayers)) {
+		const slot = parseInt(key.slice(1), 10);
+		if (slot < 0 || slot >= onlinePlayableIndices.length) continue;
+		const ci = onlinePlayableIndices[slot];
+		if (ci === onlineMyCharIndex || ci === onlineOtherCharIndex) continue;
+		const rc = char[ci];
+		const rp = onlineRemotePlayers[key];
+		if (!rc || !rp) continue;
+		rc.x = rp.x ?? rc.x;
+		rc.y = rp.y ?? rc.y;
+		rc.vx = rp.vx || 0;
+		rc.vy = rp.vy || 0;
+		rc.dire = rp.dire || 4;
+		rc.frame = rp.frame || 3;
+		rc.leg1frame = rp.leg1 || 0;
+		rc.leg2frame = rp.leg2 || 0;
+		rc.onob = rp.onob || false;
+		rc.justChanged = 2;
 	}
 }
 
@@ -12679,18 +12659,70 @@ function _drawRoundedRectFill(context, x, y, w, h, r) {
 }
 
 function drawRemoteChar(context, p, displayName) {
-	const rx = p.x - cameraX;
-	const ry = p.y - cameraY;
+	const id = (typeof p.cid === 'number' && p.cid >= 0 && p.cid < charModels.length) ? p.cid : 0;
+	const model = charModels[id];
+	const frame = p.frame || 3;
+	const leg1 = p.leg1 || 0;
+	const leg2 = p.leg2 || 0;
+	const dire = p.dire || 4;
+	const legdire = dire <= 2 ? -1 : 1;
+	const modelFrame = model.frames[Math.min(frame, model.frames.length - 1)];
+
+	const legmat = [
+		{ a: 0.3648529052734375, b: 0, c: 0, d: 0.3814697265625, tx: legdire > 0 ? -0.75 : 0.35, ty: -0.35 },
+		{ a: 0.3648529052734375, b: 0, c: 0, d: 0.3814697265625, tx: legdire > 0 ? -0.75 : 0.35, ty: -0.35 }
+	];
+	const legFrameData1 = legFrames[Math.min(leg1, legFrames.length - 1)];
+	const legFrameData2 = legFrames[Math.min(leg2, legFrames.length - 1)];
+	const lf1 = legFrameData1.type === 'static' ? legFrameData1.bodypart : (legFrameData1.frames ? legFrameData1.frames[0] : 0);
+	const lf2 = legFrameData2.type === 'static' ? legFrameData2.bodypart : (legFrameData2.frames ? legFrameData2.frames[0] : 0);
+
+	context.save();
+	context.transform(legdire * legmat[0].a, legmat[0].b, legdire * legmat[0].c, legmat[0].d, p.x + model.legx[0] + legmat[0].tx, p.y + model.legy[0] + legmat[0].ty);
+	const li1 = svgBodyParts[lf1];
+	if (li1) context.drawImage(li1, -li1.width / (scaleFactor * 2), -li1.height / (scaleFactor * 2));
+	context.restore();
+
+	context.save();
+	context.transform(legdire * legmat[1].a, legmat[1].b, legdire * legmat[1].c, legmat[1].d, p.x + model.legx[1] + legmat[1].tx, p.y + model.legy[1] + legmat[1].ty);
+	const li2 = svgBodyParts[lf2];
+	if (li2) context.drawImage(li2, -li2.width / (scaleFactor * 2), -li2.height / (scaleFactor * 2));
+	context.restore();
+
+	context.save();
+	context.transform(model.torsomat.a, model.torsomat.b, model.torsomat.c, model.torsomat.d, p.x + model.torsomat.tx, p.y + model.torsomat.ty);
+	for (let j = 0; j < modelFrame.length; j++) {
+		const mf = modelFrame[j];
+		if (mf.type === 'armroot') continue;
+		if (mf.type === 'static') {
+			const bp = svgBodyParts[mf.bodypart];
+			if (!bp) continue;
+			context.save();
+			context.transform(mf.mat.a, mf.mat.b, mf.mat.c, mf.mat.d, mf.mat.tx, mf.mat.ty);
+			context.drawImage(bp, -bp.width / (scaleFactor * 2), -bp.height / (scaleFactor * 2));
+			context.restore();
+		} else if (mf.type === 'anim') {
+			const animDef = bodyPartAnimations[mf.id];
+			if (!animDef) continue;
+			const af = animDef.frames[0];
+			const bp = svgBodyParts[animDef.bodypart];
+			if (!bp) continue;
+			context.save();
+			context.transform(af.a, af.b, af.c, af.d, af.tx, af.ty);
+			context.drawImage(bp, -bp.width / (scaleFactor * 2), -bp.height / (scaleFactor * 2));
+			context.restore();
+		}
+	}
+	context.restore();
+
 	context.font = 'bold 11px Helvetica';
 	context.textAlign = 'center';
 	context.textBaseline = 'bottom';
 	const tw = context.measureText(displayName).width + 10;
 	context.fillStyle = 'rgba(0,0,0,0.6)';
-	context.fillRect(p.x - tw / 2, p.y - 46, tw, 15);
+	_drawRoundedRectFill(context, p.x - tw / 2, p.y - charD[id][1] - 19, tw, 15, 3);
 	context.fillStyle = '#ffffff';
-	context.fillText(displayName, p.x, p.y - 31);
-	context.fillStyle = '#888888';
-	context.fillRect(p.x - 10, p.y - 30, 20, 30);
+	context.fillText(displayName, p.x, p.y - charD[id][1] - 4);
 }
 
 function drawOnlineName(charIndex, displayName) {
@@ -12708,38 +12740,6 @@ function drawOnlineName(charIndex, displayName) {
 	_drawRoundedRectFill(ctx, tx - tw / 2, ty - 15, tw, 15, 3);
 	ctx.fillStyle = '#ffffff';
 	ctx.fillText(displayName, tx, ty);
-	const isMe = charIndex === onlineMyCharIndex;
-	const chatMsg = isMe ? onlineMyChatMsg : onlineOtherChatMsg;
-	const chatTimer = isMe ? onlineMyChatTimer : onlineOtherChatTimer;
-	const typing    = isMe && onlineChatting;
-
-	if (typing || (chatMsg && chatTimer > 0)) {
-		const bubbleText = typing ? (onlineChatInput || '|') : chatMsg;
-		ctx.font = '12px Helvetica';
-		const bw = Math.min(ctx.measureText(bubbleText).width + 16, 340);
-		const bh = 22;
-		const bx = tx;
-		const by = ty - 15 - 8;
-		const alpha = chatTimer < 30 ? chatTimer / 30 : 1;
-		ctx.globalAlpha = typing ? 0.9 : alpha;
-		ctx.fillStyle = typing ? 'rgba(60,60,180,0.85)' : 'rgba(30,30,30,0.85)';
-		_drawRoundedRectFill(ctx, bx - bw / 2, by - bh, bw, bh, 5);
-		ctx.beginPath();
-		ctx.moveTo(bx - 5, by);
-		ctx.lineTo(bx + 5, by);
-		ctx.lineTo(bx, by + 6);
-		ctx.closePath();
-		ctx.fill();
-		ctx.globalAlpha = typing ? 0.9 : alpha;
-		ctx.fillStyle = '#ffffff';
-		ctx.textAlign = 'center';
-		ctx.textBaseline = 'middle';
-		let display = bubbleText;
-		while (display.length > 1 && ctx.measureText(display + '..').width > bw - 16) display = display.slice(0, -1);
-		if (display !== bubbleText) display += '..';
-		ctx.fillText(display, bx, by - bh / 2);
-		ctx.globalAlpha = 1;
-	}
 	ctx.restore();
 }
 
@@ -12784,7 +12784,7 @@ function _drawOnlineMenuImpl() {
 	ctx.fillText('Private code', 28, 172);
 	ctx.font = '18px Helvetica';
 	ctx.fillStyle = '#aaaaaa';
-	ctx.fillText('20 July 2026 8.27 (ma birthday!)', 28, 196);
+	ctx.fillText('19 July 20206 16.23', 28, 196);
 	_onlineKwBoxObj.x = 28;
 	_onlineKwBoxObj.y = 216;
 	_onlineKwBoxObj.draw();
