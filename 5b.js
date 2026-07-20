@@ -8293,8 +8293,31 @@ function draw() {
 				}
 			} else {
 				if (control < 1000) {
-					if (true) {
-					if (recover) {
+					if (onlineInGame && !onlineChatting && _keysDown[191]) {
+					onlineChatting = true;
+					onlineChatInput = '';
+				}
+				if (onlineChatting) {
+					if (_keysDown[13]) {
+						if (!csPress && onlineChatInput.trim().length > 0) {
+							onlineMyChatMsg = onlineChatInput.trim().slice(0, 64);
+							onlineMyChatTimer = cbdOnline;
+							if (_fbDb_online && onlineSessionId) {
+								_fb_set(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/chat/p' + onlineMySlot), {
+									msg: onlineMyChatMsg, ts: Date.now()
+								});
+							}
+						}
+						onlineChatting = false;
+						onlineChatInput = '';
+						csPress = true;
+					} else csPress = false;
+					if (_keysDown[27]) {
+						onlineChatting = false;
+						onlineChatInput = '';
+					}
+				} else {
+				if (recover) {
 						char[control].justChanged = 2;
 						if (recoverTimer == 0) {
 							if (_keysDown[37]) {
@@ -8336,13 +8359,16 @@ function draw() {
 									putDown(control);
 									charThrow(control);
 								} else {
+									if (!char[control].carry) {
 									for (let i = 0; i < charCount; i++) {
 										if (
 											i != control &&
 											near(control, i) &&
 											char[i].charState >= 6 &&
 											char[control].standingOn != i &&
-											onlyMovesOneBlock(i, control)
+											onlyMovesOneBlock(i, control) &&
+											!(char[i].carriedBy >= 0 && char[i].carriedBy !== control) &&
+											!(onlineInGame && i === onlineOtherCharIndex && char[i].carriedBy >= 0)
 										) {
 											if (char[i].carry) putDown(i);
 											if (ifCarried(i)) putDown(char[i].carriedBy);
@@ -8366,6 +8392,7 @@ function draw() {
 											break;
 										}
 									}
+								}
 								}
 							}
 						}
@@ -11180,6 +11207,7 @@ function draw() {
 		if (onlineInGame && menuScreen == 3) {
 			if (_frameCount % 2 === 0) onlineSendState();
 			if (!onlinePlaza) onlineApplyOtherState();
+			tickOnlineChat();
 			ctx.save();
 			ctx.translate(Math.floor(-cameraX + shakeX), Math.floor(-cameraY + shakeY));
 			if (onlinePlaza) {
@@ -11190,7 +11218,7 @@ function draw() {
 					const idleMs = now - (p.lastMove || p.ts);
 					if (idleMs >= 60000) continue;
 					ctx.globalAlpha = idleMs >= 30000 ? Math.max(0, 0.5 - 0.5 * ((idleMs - 30000) / 30000)) : 1;
-					drawRemoteChar(ctx, p, p.name || 'Player');
+					drawRemoteChar(ctx, p, p.name || 'Player', uid);
 					ctx.globalAlpha = 1;
 				}
 			} else {
@@ -11206,6 +11234,21 @@ function draw() {
 			}
 			ctx.restore();
 
+			if (onlineInGame && !onlinePlaza && onlineChatting) {
+				ctx.save();
+				ctx.fillStyle = "rgba(0,0,0,0.65)";
+				ctx.fillRect(0, cheight - 36, cwidth, 36);
+				ctx.font = "18px Helvetica";
+				ctx.fillStyle = "#aaaaff";
+				ctx.textAlign = "left";
+				ctx.textBaseline = "middle";
+				ctx.fillText("/ " + onlineChatInput + (_frameCount % 40 < 20 ? "|" : ""), 12, cheight - 18);
+				ctx.fillStyle = "#777777";
+				ctx.font = "13px Helvetica";
+				ctx.textAlign = "right";
+				ctx.fillText("enter  esc", cwidth - 12, cheight - 18);
+				ctx.restore();
+			}
 		}
 		if (menuScreen != 3) {
 			cameraX = 0;
@@ -12226,13 +12269,28 @@ async function onlineStartMatchmaking(levelIndex) {
 			if (!val2) return;
 			const filled = ['player0','player1','player2'].filter(k => val2[k]).length;
 			if (filled >= slotCount || val2.started) {
-				_fb_off(sessRef);
-				onlineUnsubMatch = null;
+				if (onlineUnsubMatch) { try { onlineUnsubMatch(); } catch(e) {} onlineUnsubMatch = null; }
 				_onlineStopHeartbeat();
-				if (val2.player1) onlineOtherName = val2.player1.name || 'Player';
+				for (let s = 1; s < slotCount; s++) {
+					const pkey = 'player' + s;
+					if (val2[pkey] && val2[pkey].name) {
+						onlineOtherName = val2[pkey].name || 'Player';
+						break;
+					}
+				}
 				onlineBeginGame();
 			}
 		});
+		setTimeout(async () => {
+			if (!onlineMatchmaking || onlineSessionId !== sessionId) return;
+			if (onlineUnsubMatch) { try { onlineUnsubMatch(); } catch(e) {} onlineUnsubMatch = null; }
+			_onlineStopHeartbeat();
+			try { await _fb_remove(_fb_ref(_fbDb_online, 'online/sessions/' + sessionId)); } catch(e) {}
+			try { await _fb_remove(_fb_ref(_fbDb_online, queuePath)); } catch(e) {}
+			onlineSessionId = null;
+			_onlineQueuePath = null;
+			onlineStartMatchmaking(levelIndex);
+		}, 15000);
 	}
 }
 
@@ -12411,6 +12469,13 @@ function onlineBeginGame() {
 			}
 		}
 
+		const chatVal = val['chat'] && val['chat']['p' + onlineOtherSlot];
+		if (chatVal && chatVal.msg && chatVal.ts !== onlineOtherChatLastTs) {
+			onlineOtherChatLastTs = chatVal.ts;
+			onlineOtherChatMsg = chatVal.msg;
+			onlineOtherChatTimer = cbdOnline;
+		}
+
 		const diaVal = val['dia'];
 		if (diaVal && cutScene === 1) {
 			const readyCount = Object.keys(diaVal).filter(k => diaVal[k] === true).length;
@@ -12539,8 +12604,8 @@ function onlineApplyOtherState() {
 		const rc = char[ci];
 		const rp = onlineRemotePlayers[key];
 		if (!rc || !rp) continue;
-		rc.x = rp.x ?? rc.x;
-		rc.y = rp.y ?? rc.y;
+		rc.x = rp.x != null ? rp.x : rc.x;
+		rc.y = rp.y != null ? rp.y : rc.y;
 		rc.vx = rp.vx || 0;
 		rc.vy = rp.vy || 0;
 		rc.dire = rp.dire || 4;
@@ -12548,6 +12613,9 @@ function onlineApplyOtherState() {
 		rc.leg1frame = rp.leg1 || 0;
 		rc.leg2frame = rp.leg2 || 0;
 		rc.onob = rp.onob || false;
+		rc.carry = false;
+		rc.carryObject = -1;
+		rc.carriedBy = -1;
 		rc.justChanged = 2;
 	}
 }
@@ -12658,60 +12726,94 @@ function _drawRoundedRectFill(context, x, y, w, h, r) {
 	context.fill();
 }
 
-function drawRemoteChar(context, p, displayName) {
-	const id = (typeof p.cid === 'number' && p.cid >= 0 && p.cid < charModels.length) ? p.cid : 0;
+const _validPlazaIds = [0,1,2,3,4,5,6,7,8];
+function _plazaCharId(uid) {
+	let h = 0;
+	for (let k = 0; k < uid.length; k++) h = (h * 31 + uid.charCodeAt(k)) >>> 0;
+	return _validPlazaIds[h % _validPlazaIds.length];
+}
+
+function drawRemoteChar(context, p, displayName, uid) {
+	let id = typeof p.cid === 'number' && p.cid >= 0 && p.cid < charModels.length && charD[p.cid][7] >= 1
+		? p.cid
+		: _plazaCharId(uid || displayName || 'x');
 	const model = charModels[id];
-	const frame = p.frame || 3;
+	if (!model) return;
+	const frame = Math.min(p.frame || 3, model.frames.length - 1);
 	const leg1 = p.leg1 || 0;
 	const leg2 = p.leg2 || 0;
 	const dire = p.dire || 4;
 	const legdire = dire <= 2 ? -1 : 1;
-	const modelFrame = model.frames[Math.min(frame, model.frames.length - 1)];
+	const modelFrame = model.frames[frame];
 
-	const legmat = [
+	const legf1 = legFrames[Math.min(leg1, legFrames.length - 1)];
+	const legf2 = legFrames[Math.min(leg2, legFrames.length - 1)];
+	let f = [0, 0];
+	let legmat = [
 		{ a: 0.3648529052734375, b: 0, c: 0, d: 0.3814697265625, tx: legdire > 0 ? -0.75 : 0.35, ty: -0.35 },
 		{ a: 0.3648529052734375, b: 0, c: 0, d: 0.3814697265625, tx: legdire > 0 ? -0.75 : 0.35, ty: -0.35 }
 	];
-	const legFrameData1 = legFrames[Math.min(leg1, legFrames.length - 1)];
-	const legFrameData2 = legFrames[Math.min(leg2, legFrames.length - 1)];
-	const lf1 = legFrameData1.type === 'static' ? legFrameData1.bodypart : (legFrameData1.frames ? legFrameData1.frames[0] : 0);
-	const lf2 = legFrameData2.type === 'static' ? legFrameData2.bodypart : (legFrameData2.frames ? legFrameData2.frames[0] : 0);
 
-	context.save();
-	context.transform(legdire * legmat[0].a, legmat[0].b, legdire * legmat[0].c, legmat[0].d, p.x + model.legx[0] + legmat[0].tx, p.y + model.legy[0] + legmat[0].ty);
-	const li1 = svgBodyParts[lf1];
-	if (li1) context.drawImage(li1, -li1.width / (scaleFactor * 2), -li1.height / (scaleFactor * 2));
-	context.restore();
+	if (legf1.type === 'static') {
+		f[0] = legf1.bodypart;
+		f[1] = legf1.bodypart;
+	} else if (legf1.type === 'anim') {
+		if (legf1.usesMats) {
+			f[0] = legf1.bodypart;
+			f[1] = legf1.bodypart;
+			legmat = [
+				legf1.frames[0],
+				legf1.frames[0]
+			];
+		} else {
+			f[0] = legf1.frames[0];
+			f[1] = legf1.frames[0];
+		}
+	}
 
-	context.save();
-	context.transform(legdire * legmat[1].a, legmat[1].b, legdire * legmat[1].c, legmat[1].d, p.x + model.legx[1] + legmat[1].tx, p.y + model.legy[1] + legmat[1].ty);
-	const li2 = svgBodyParts[lf2];
-	if (li2) context.drawImage(li2, -li2.width / (scaleFactor * 2), -li2.height / (scaleFactor * 2));
-	context.restore();
+	if (model.legx) {
+		context.save();
+		context.transform(legdire * legmat[0].a, legmat[0].b, legdire * legmat[0].c, legmat[0].d, p.x + model.legx[0] + legmat[0].tx, p.y + model.legy[0] + legmat[0].ty);
+		const li1 = svgBodyParts[f[0]];
+		if (li1) context.drawImage(li1, -li1.width / (scaleFactor * 2), -li1.height / (scaleFactor * 2));
+		context.restore();
+		context.save();
+		context.transform(legdire * legmat[1].a, legmat[1].b, legdire * legmat[1].c, legmat[1].d, p.x + model.legx[1] + legmat[1].tx, p.y + model.legy[1] + legmat[1].ty);
+		const li2 = svgBodyParts[f[1]];
+		if (li2) context.drawImage(li2, -li2.width / (scaleFactor * 2), -li2.height / (scaleFactor * 2));
+		context.restore();
+	}
 
 	context.save();
 	context.transform(model.torsomat.a, model.torsomat.b, model.torsomat.c, model.torsomat.d, p.x + model.torsomat.tx, p.y + model.torsomat.ty);
 	for (let j = 0; j < modelFrame.length; j++) {
 		const mf = modelFrame[j];
 		if (mf.type === 'armroot') continue;
-		if (mf.type === 'static') {
-			const bp = svgBodyParts[mf.bodypart];
-			if (!bp) continue;
-			context.save();
-			context.transform(mf.mat.a, mf.mat.b, mf.mat.c, mf.mat.d, mf.mat.tx, mf.mat.ty);
-			context.drawImage(bp, -bp.width / (scaleFactor * 2), -bp.height / (scaleFactor * 2));
-			context.restore();
+		let img = null;
+		let doAnim = false;
+		let animMat = null;
+		if (mf.type === 'body') {
+			img = svgChars[id] ? (Array.isArray(svgChars[id]) ? svgChars[id][0] : svgChars[id]) : null;
+		} else if (mf.type === 'static') {
+			img = svgBodyParts[mf.bodypart];
 		} else if (mf.type === 'anim') {
-			const animDef = bodyPartAnimations[mf.id];
-			if (!animDef) continue;
-			const af = animDef.frames[0];
-			const bp = svgBodyParts[animDef.bodypart];
-			if (!bp) continue;
-			context.save();
-			context.transform(af.a, af.b, af.c, af.d, af.tx, af.ty);
-			context.drawImage(bp, -bp.width / (scaleFactor * 2), -bp.height / (scaleFactor * 2));
-			context.restore();
+			const adef = bodyPartAnimations[mf.anim !== undefined ? mf.anim : mf.id];
+			if (adef) {
+				img = svgBodyParts[adef.bodypart];
+				animMat = adef.frames[0];
+				doAnim = true;
+			}
+		} else if (mf.type === 'dia') {
+			const expr = charModels[id].defaultExpr !== undefined ? charModels[id].defaultExpr : 0;
+			const dm = diaMouths[expr + charModels[id].mouthType * 2];
+			if (dm) img = svgBodyParts[dm.frames[dm.frameorder[0]].bodypart];
 		}
+		if (!img) continue;
+		context.save();
+		context.transform(mf.mat.a, mf.mat.b, mf.mat.c, mf.mat.d, mf.mat.tx, mf.mat.ty);
+		if (doAnim && animMat) context.transform(animMat.a, animMat.b, animMat.c, animMat.d, animMat.tx, animMat.ty);
+		context.drawImage(img, -img.width / (scaleFactor * 2), -img.height / (scaleFactor * 2));
+		context.restore();
 	}
 	context.restore();
 
@@ -12719,10 +12821,11 @@ function drawRemoteChar(context, p, displayName) {
 	context.textAlign = 'center';
 	context.textBaseline = 'bottom';
 	const tw = context.measureText(displayName).width + 10;
+	const nameY = p.y - (charD[id][1] || 30) - 4;
 	context.fillStyle = 'rgba(0,0,0,0.6)';
-	_drawRoundedRectFill(context, p.x - tw / 2, p.y - charD[id][1] - 19, tw, 15, 3);
+	_drawRoundedRectFill(context, p.x - tw / 2, nameY - 15, tw, 15, 3);
 	context.fillStyle = '#ffffff';
-	context.fillText(displayName, p.x, p.y - charD[id][1] - 4);
+	context.fillText(displayName, p.x, nameY);
 }
 
 function drawOnlineName(charIndex, displayName) {
@@ -12740,11 +12843,44 @@ function drawOnlineName(charIndex, displayName) {
 	_drawRoundedRectFill(ctx, tx - tw / 2, ty - 15, tw, 15, 3);
 	ctx.fillStyle = '#ffffff';
 	ctx.fillText(displayName, tx, ty);
+
+	const isMe = charIndex === onlineMyCharIndex;
+	const chatMsg = isMe ? onlineMyChatMsg : onlineOtherChatMsg;
+	const chatTimer = isMe ? onlineMyChatTimer : onlineOtherChatTimer;
+	const typing = isMe && onlineChatting;
+
+	if (typing || (chatMsg && chatTimer > 0)) {
+		const bubbleText = typing ? (onlineChatInput || '|') : chatMsg;
+		ctx.font = '12px Helvetica';
+		const maxBw = 200;
+		const alpha = (!typing && chatTimer < 30) ? chatTimer / 30 : 1;
+		let display = bubbleText;
+		while (display.length > 1 && ctx.measureText(display).width > maxBw - 16) display = display.slice(0, -1);
+		if (display !== bubbleText) display += '..';
+		const bw = Math.min(ctx.measureText(display).width + 16, maxBw);
+		const bh = 22;
+		const bx = tx;
+		const by = ty - 15 - 8;
+		ctx.globalAlpha = typing ? 0.9 : alpha;
+		ctx.fillStyle = typing ? 'rgba(60,60,180,0.85)' : 'rgba(30,30,30,0.85)';
+		_drawRoundedRectFill(ctx, bx - bw / 2, by - bh, bw, bh, 5);
+		ctx.beginPath();
+		ctx.moveTo(bx - 5, by);
+		ctx.lineTo(bx + 5, by);
+		ctx.lineTo(bx, by + 6);
+		ctx.closePath();
+		ctx.fill();
+		ctx.fillStyle = '#ffffff';
+		ctx.textAlign = 'center';
+		ctx.textBaseline = 'middle';
+		ctx.fillText(display, bx, by - bh / 2);
+		ctx.globalAlpha = 1;
+	}
 	ctx.restore();
 }
 
 function tickOnlineChat() {
-	if (onlineMyChatTimer  > 0) onlineMyChatTimer--;
+	if (onlineMyChatTimer > 0) onlineMyChatTimer--;
 	if (onlineOtherChatTimer > 0) onlineOtherChatTimer--;
 }
 
@@ -12784,7 +12920,7 @@ function _drawOnlineMenuImpl() {
 	ctx.fillText('Private code', 28, 172);
 	ctx.font = '18px Helvetica';
 	ctx.fillStyle = '#aaaaaa';
-	ctx.fillText('19 July 20206 16.23', 28, 196);
+	ctx.fillText('19 July 3.47AM ', 28, 196);
 	_onlineKwBoxObj.x = 28;
 	_onlineKwBoxObj.y = 216;
 	_onlineKwBoxObj.draw();
