@@ -11187,10 +11187,12 @@ function draw() {
 		if (cutScene == 1 || cutScene == 2) {
 			drawCutScene();
 			if (onlineInGame && !onlinePlaza && cutScene == 1) {
-				onlineDiaAutoTimer++;
-				if (onlineDiaAutoTimer >= 600) {
-					onlineDiaAutoTimer = 0;
-					_fb_set(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/state/dia/p' + onlineMySlot), true);
+				if (!onlineDiaReady) {
+					onlineDiaAutoTimer++;
+					if (onlineDiaAutoTimer >= 600) {
+						onlineDiaAutoTimer = 0;
+						_fb_set(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/state/dia/p' + onlineMySlot), true);
+					}
 				}
 				ctx.font = '16px Helvetica';
 				ctx.fillStyle = '#ffffff';
@@ -12100,6 +12102,7 @@ let _vanillaDialogueFace = null;
 let _vanillaLevelName = null;
 let _vanillaMdao = null;
 let _vanillaLevelCount = null;
+let onlinePlaza = false;
 let onlinePlazaUid = null;
 let onlinePlazaPlayers = {};
 let onlinePlazaUnsub = null;
@@ -12149,7 +12152,7 @@ async function onlineLoadLevels() {
 			i++;
 
 			const blockLines = lines.slice(blockStart, blockEnd);
-			lvls.push({ name, data: blockLines.join('\n') });
+			lvls.push({ name, data: blockLines.join('\n'), charCount: charCountL });
 		}
 		onlineLevelsData = lvls.length ? lvls : null;
 	} catch(e) {
@@ -12184,7 +12187,7 @@ async function onlineStartMatchmaking(levelIndex) {
 		? 'online/queue_kw/' + keyword.replace(/[.#$\[\]]/g, '_') + '_' + levelIndex
 		: 'online/queue_' + levelIndex;
 	_onlineQueuePath = queuePath;
-	const slotCount = levelIndex === 0 ? 2 : 3;
+	const slotCount = Math.max(2, onlineLevelsData[levelIndex].charCount || 2);
 	onlineSlotCount = slotCount;
 
 	const snap = await _fb_get(_fb_ref(_fbDb_online, queuePath));
@@ -12579,8 +12582,8 @@ function onlineDisconnect() {
 		if (_fbDb_online && onlinePlazaUid) {
 			try { _fb_remove(_fb_ref(_fbDb_online, 'online/plaza/' + onlinePlazaUid)); } catch(e) {}
 		}
-		if (onlinePlazaUnsub && _fbDb_online) {
-			try { _fb_off(_fb_ref(_fbDb_online, 'online/plaza')); } catch(e) {}
+		if (onlinePlazaUnsub) {
+			try { onlinePlazaUnsub(); } catch(e) {}
 		}
 		onlinePlazaUnsub = null;
 		onlinePlaza = false;
@@ -12589,17 +12592,17 @@ function onlineDisconnect() {
 	}
 
 	if (onlineUnsubMatch) {
-		if (_onlineQueuePath && _fbDb_online) {
-			try { _fb_off(_fb_ref(_fbDb_online, _onlineQueuePath)); } catch(e) {}
-			try { _fb_remove(_fb_ref(_fbDb_online, _onlineQueuePath)); } catch(e) {}
-		}
+		try { onlineUnsubMatch(); } catch(e) {}
 		onlineUnsubMatch = null;
+	}
+	if (_onlineQueuePath && _fbDb_online) {
+		try { _fb_remove(_fb_ref(_fbDb_online, _onlineQueuePath)); } catch(e) {}
 	}
 	_onlineQueuePath = null;
 	_onlineStopHeartbeat();
 
-	if (onlineUnsubState && _fbDb_online && onlineSessionId) {
-		try { _fb_off(_fb_ref(_fbDb_online, 'online/sessions/' + onlineSessionId + '/state')); } catch(e) {}
+	if (onlineUnsubState) {
+		try { onlineUnsubState(); } catch(e) {}
 		onlineUnsubState = null;
 	}
 
@@ -12781,7 +12784,7 @@ function _drawOnlineMenuImpl() {
 	ctx.fillText('Private code', 28, 172);
 	ctx.font = '18px Helvetica';
 	ctx.fillStyle = '#aaaaaa';
-	ctx.fillText('19 July 2026 19.12 FOURTH ', 28, 196);
+	ctx.fillText('20 July 2026 8.27 (ma birthday!)', 28, 196);
 	_onlineKwBoxObj.x = 28;
 	_onlineKwBoxObj.y = 216;
 	_onlineKwBoxObj.draw();
