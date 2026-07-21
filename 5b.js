@@ -12232,8 +12232,7 @@ async function onlineStartMatchmaking(levelIndex) {
 				if (!val2) return;
 				const filled = ['player0','player1','player2'].filter(k => val2[k]).length;
 				if (filled >= slotCount || val2.started) {
-					_fb_off(sessRef);
-					onlineUnsubMatch = null;
+					if (onlineUnsubMatch) { try { onlineUnsubMatch(); } catch(e) {} onlineUnsubMatch = null; }
 					_onlineStopHeartbeat();
 					onlineBeginGame();
 				}
@@ -12281,16 +12280,6 @@ async function onlineStartMatchmaking(levelIndex) {
 				onlineBeginGame();
 			}
 		});
-		setTimeout(async () => {
-			if (!onlineMatchmaking || onlineSessionId !== sessionId) return;
-			if (onlineUnsubMatch) { try { onlineUnsubMatch(); } catch(e) {} onlineUnsubMatch = null; }
-			_onlineStopHeartbeat();
-			try { await _fb_remove(_fb_ref(_fbDb_online, 'online/sessions/' + sessionId)); } catch(e) {}
-			try { await _fb_remove(_fb_ref(_fbDb_online, queuePath)); } catch(e) {}
-			onlineSessionId = null;
-			_onlineQueuePath = null;
-			onlineStartMatchmaking(levelIndex);
-		}, 15000);
 	}
 }
 
@@ -12361,13 +12350,19 @@ function onlineBeginGame() {
 		onlinePlazaUnsub = _fb_onValue(plazaRef, snap => {
 			if (!onlinePlaza || onlinePlazaUid !== myUid) return;
 			const val = snap.val();
-			onlinePlazaPlayers = {};
-			if (!val) return;
 			const t = Date.now();
+			if (!val) { onlinePlazaPlayers = {}; return; }
 			for (const uid of Object.keys(val)) {
 				if (uid === myUid) continue;
 				const p = val[uid];
-				if (p && p.ts && t - p.ts < 10000) onlinePlazaPlayers[uid] = p;
+				if (p && p.ts && t - p.ts < 30000) {
+					onlinePlazaPlayers[uid] = p;
+				} else {
+					delete onlinePlazaPlayers[uid];
+				}
+			}
+			for (const uid of Object.keys(onlinePlazaPlayers)) {
+				if (!val[uid]) delete onlinePlazaPlayers[uid];
 			}
 		});
 
@@ -12920,7 +12915,7 @@ function _drawOnlineMenuImpl() {
 	ctx.fillText('Private code', 28, 172);
 	ctx.font = '18px Helvetica';
 	ctx.fillStyle = '#aaaaaa';
-	ctx.fillText('19 July 3.47AM ', 28, 196);
+	ctx.fillText('mbg mas bahlil ganteng', 28, 196);
 	_onlineKwBoxObj.x = 28;
 	_onlineKwBoxObj.y = 216;
 	_onlineKwBoxObj.draw();
